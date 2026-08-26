@@ -1,1 +1,52 @@
 .worktrees/
+
+# Rust
+/target/
+
+# Gradle and Android
+/.gradle/
+/apps/android/.gradle/
+/apps/android/**/build/
+/apps/android/local.properties
+
+# IDE and editor-local state
+/.idea/workspace.xml
+/.idea/tasks.xml
+/.idea/shelf/
+/.idea/httpRequests/
+/.idea/dataSources/
+/.vscode/
+*.iml
+
+# Qt and CMake generated files
+/build/
+/cmake-build-*/
+/CMakeFiles/
+/CMakeCache.txt
+*.pro.user
+*.qmake.stash
+moc_*.cpp
+qrc_*.cpp
+ui_*.h
+
+# Nix
+/result
+/result-*
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+*~
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key

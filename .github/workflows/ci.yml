@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: arduino/setup-protoc@v3
+        with:
+          version: "29.3"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install schema validator
+        run: python -m pip install check-jsonschema
+      - uses: Swatinem/rust-cache@v2
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Lint Rust
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Check Rust workspace
+        run: cargo check --workspace --all-targets
+      - name: Test Rust workspace
+        run: cargo test --workspace
+      - name: Validate protocol contracts
+        run: |
+          protoc --proto_path=protocol/proto --include_imports --descriptor_set_out=/tmp/kubeweft-v1.pb protocol/proto/kubeweft/v1/*.proto
+          check-jsonschema --check-metaschema protocol/schemas/*.schema.json
