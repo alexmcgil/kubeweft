@@ -19,10 +19,10 @@
 *.iml
 
 # Qt and CMake generated files
-/build/
-/cmake-build-*/
-/CMakeFiles/
-/CMakeCache.txt
+**/build/
+**/cmake-build-*/
+**/CMakeFiles/
+**/CMakeCache.txt
 *.pro.user
 *.qmake.stash
 moc_*.cpp
