@@ -1,0 +1,9 @@
+[package]
+name = "kubeweft-scheduler"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+kubeweft-model = { path = "../kubeweft-model" }

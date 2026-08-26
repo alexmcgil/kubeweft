@@ -1,5 +1,15 @@
 [workspace]
-members = ["crates/kubeweft-model"]
+members = [
+    "crates/kubeweft-model",
+    "crates/kubeweft-capability",
+    "crates/kubeweft-identity",
+    "crates/kubeweft-policy",
+    "crates/kubeweft-scheduler",
+    "crates/kubeweft-planner",
+    "crates/kubeweft-agent-core",
+    "crates/kubeweft-plugin-sdk",
+    "crates/kubeweft-protocol",
+]
 resolver = "2"
 
 [workspace.package]
