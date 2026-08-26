@@ -40,7 +40,7 @@ Large data should use a direct path whenever practical. For example, an Android 
 
 ## Agents, adapters, and trust
 
-An agent hosts platform-independent coordination plus local adapters. Linux adapters may eventually map filesystem, process, systemd, container, PipeWire, or Sunshine mechanisms to capabilities. Android is a separate native Kotlin and Jetpack Compose implementation of the shared protocol, using Android APIs behind Android adapters; it does not consume Rust through JNI. Linux uses Rust agents and adapters, while Android uses its own process, service, registry, client, and Compose boundaries.
+An agent hosts platform-independent coordination plus local adapters. Linux adapters may eventually map filesystem, process, systemd, container, PipeWire, or Sunshine mechanisms to capabilities. Android is a separate native Kotlin and Jetpack Compose client for the shared protocol; it does not consume Rust through JNI. Linux uses Rust agents and adapters. As Android integration grows, its process, service, registry, client, and Compose boundaries will remain native Kotlin and use Android APIs behind Android adapters.
 
 Network membership or VPN reachability is not trust and never grants capability authorization. Each capability is authorized separately and follows least privilege. A scheduler sees `core.application.launch = available`, not `available_via_shizuku = true`, unless policy deliberately needs backend metadata. Compromised membership must not automatically grant SSH, filesystem, or administrator access.
 

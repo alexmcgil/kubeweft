@@ -24,7 +24,7 @@ The control plane discovers devices, authorizes capabilities, chooses placement,
 
 ## Development
 
-Task 7 supplies the top-level `just` recipes. In its Nix development shell, use:
+The top-level `just` recipes provide the repository checks. In the Nix development shell, use:
 
 ```sh
 just check
