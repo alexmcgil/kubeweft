@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package kubeweft.v1;
+
+import "kubeweft/v1/device.proto";
+import "kubeweft/v1/job.proto";
+
+// Field numbers are part of the wire contract. Removed field numbers must be
+// reserved and never reused.
+//
+// These are semantic envelopes only; no transport or RPC service is defined.
+message AdvertiseDeviceRequest {
+  Device device = 1;
+}
+
+message AdvertiseDeviceResponse {
+  Device device = 1;
+}
+
+message SubmitJobRequest {
+  Job job = 1;
+}
+
+message SubmitJobResponse {
+  Job job = 1;
+}
