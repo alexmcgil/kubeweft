@@ -28,5 +28,22 @@ fn unknown_command_is_rejected() {
     let output = kubeweft().arg("unknown").output().unwrap();
 
     assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.stderr, b"unknown command: unknown\n");
+}
+
+#[test]
+fn doctor_rejects_a_trailing_argument() {
+    let output = kubeweft().args(["doctor", "unknown"]).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.stderr, b"unknown command: unknown\n");
+}
+
+#[test]
+fn version_rejects_a_trailing_argument() {
+    let output = kubeweft().args(["--version", "unknown"]).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
     assert_eq!(output.stderr, b"unknown command: unknown\n");
 }
