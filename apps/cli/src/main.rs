@@ -13,7 +13,7 @@ fn main() -> ExitCode {
 
     match command {
         Some(command) if command == "--version" => {
-            println!("kubeweft 0.1.0");
+            println!("kubeweft {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
         Some(command) if command == "doctor" => {

@@ -4,7 +4,7 @@
         android:allowBackup="true"
         android:label="Kubeweft"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.DeviceDefault.DayNight.NoActionBar">
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
         <activity
             android:name=".app.MainActivity"
             android:exported="true">

@@ -23,6 +23,7 @@ proto-check:
     mkdir -p target/proto
     protoc --proto_path=protocol/proto --include_imports --descriptor_set_out=target/proto/kubeweft-v1.pb protocol/proto/kubeweft/v1/*.proto
     check-jsonschema --check-metaschema protocol/schemas/*.schema.json
+    check-jsonschema --schemafile protocol/schemas/application.schema.json examples/manifests/zed.application.yaml
 
 android-check:
     if [[ -z "${ANDROID_HOME:-}" && -z "${ANDROID_SDK_ROOT:-}" ]]; then \

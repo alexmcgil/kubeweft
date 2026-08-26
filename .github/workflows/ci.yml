@@ -4,12 +4,17 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.85.0
+        with:
+          components: rustfmt, clippy
       - uses: arduino/setup-protoc@v3
         with:
           version: "29.3"
@@ -31,3 +36,4 @@ jobs:
         run: |
           protoc --proto_path=protocol/proto --include_imports --descriptor_set_out=/tmp/kubeweft-v1.pb protocol/proto/kubeweft/v1/*.proto
           check-jsonschema --check-metaschema protocol/schemas/*.schema.json
+          check-jsonschema --schemafile protocol/schemas/application.schema.json examples/manifests/zed.application.yaml
