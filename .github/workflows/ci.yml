@@ -11,29 +11,11 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85.0
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
         with:
-          components: rustfmt, clippy
-      - uses: arduino/setup-protoc@v3
-        with:
-          version: "29.3"
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-      - name: Install schema validator
-        run: python -m pip install check-jsonschema
-      - uses: Swatinem/rust-cache@v2
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-      - name: Lint Rust
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Check Rust workspace
-        run: cargo check --workspace --all-targets
-      - name: Test Rust workspace
-        run: cargo test --workspace
-      - name: Validate protocol contracts
-        run: |
-          protoc --proto_path=protocol/proto --include_imports --descriptor_set_out=/tmp/kubeweft-v1.pb protocol/proto/kubeweft/v1/*.proto
-          check-jsonschema --check-metaschema protocol/schemas/*.schema.json
-          check-jsonschema --schemafile protocol/schemas/application.schema.json examples/manifests/zed.application.yaml
+          determinate: false
+      - name: Validate repository
+        run: nix develop --command just check

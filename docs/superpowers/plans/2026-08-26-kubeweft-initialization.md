@@ -18,7 +18,7 @@
 - The scheduler produces plans and never executes operating-system actions.
 - Plugins are future out-of-process programs; do not define a Rust dynamic-library ABI.
 - Protocol Buffer package names are exactly `kubeweft.v1` and are not coupled to a transport.
-- Android namespace is exactly `dev.kubeweft.android`; no JNI or Rust integration.
+- Android namespace is exactly `su.fack.kubeweft`; no JNI or Rust integration.
 - Desktop is documentation-only in this iteration and is excluded from required builds.
 - Keep `Cargo.lock` and Gradle Wrapper files tracked.
 - Do not introduce speculative networking, storage, database, consensus, policy-language, streaming, or observability dependencies.
@@ -299,7 +299,7 @@ rtk git commit -m "feat: add protocol and manifest schemas"
 
 **Interfaces:**
 - Consumes: the conceptual shared protocol only; no Rust artifacts.
-- Produces: Android application namespace `dev.kubeweft.android` and a Compose screen with the approved copy.
+- Produces: Android application namespace `su.fack.kubeweft` and a Compose screen with the approved copy.
 
 - [ ] **Step 1: Create Gradle configuration and a failing copy-model test**
 

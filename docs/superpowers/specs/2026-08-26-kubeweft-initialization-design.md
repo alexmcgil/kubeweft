@@ -88,7 +88,7 @@ with a non-zero exit status and concise diagnostic output.
 
 The Android application is an independent Kotlin implementation of the shared
 protocol. It uses Gradle Kotlin DSL, Jetpack Compose, Material 3, namespace
-`dev.kubeweft.android`, and a checked-in Gradle Wrapper. Its only user-facing
+`su.fack.kubeweft`, and a checked-in Gradle Wrapper. Its only user-facing
 behavior is a screen containing “Kubeweft” and “No cluster connected.” Suggested
 agent, capability, cluster, platform, and UI package boundaries are represented
 only where meaningful documentation or code is needed; no JNI or Rust integration

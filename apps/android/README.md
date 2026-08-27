@@ -12,11 +12,11 @@ for later work.
 The following packages are documented boundaries for future implementation;
 they are intentionally not created until they contain real code.
 
-- `dev.kubeweft.android.agent`: agent discovery, connection, and lifecycle.
-- `dev.kubeweft.android.capability`: capability presentation and invocation.
-- `dev.kubeweft.android.cluster`: cluster identity, selection, and state.
-- `dev.kubeweft.android.platform`: Android platform services and integrations.
-- `dev.kubeweft.android.ui`: Compose screens and presentation state.
+- `su.fack.kubeweft.agent`: agent discovery, connection, and lifecycle.
+- `su.fack.kubeweft.capability`: capability presentation and invocation.
+- `su.fack.kubeweft.cluster`: cluster identity, selection, and state.
+- `su.fack.kubeweft.platform`: Android platform services and integrations.
+- `su.fack.kubeweft.ui`: Compose screens and presentation state.
 
 ## Build
 

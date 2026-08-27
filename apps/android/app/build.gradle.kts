@@ -7,11 +7,11 @@ plugins {
 }
 
 android {
-    namespace = "dev.kubeweft.android"
+    namespace = "su.fack.kubeweft"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "dev.kubeweft.android"
+        applicationId = "su.fack.kubeweft"
         minSdk = 26
         targetSdk = 35
         versionCode = 1

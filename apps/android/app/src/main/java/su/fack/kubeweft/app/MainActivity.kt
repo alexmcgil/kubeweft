@@ -1,9 +1,9 @@
-package dev.kubeweft.android.app
+package su.fack.kubeweft.app
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import dev.kubeweft.android.ui.KubeweftApp
+import su.fack.kubeweft.ui.KubeweftApp
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
