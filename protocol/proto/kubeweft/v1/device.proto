@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package kubeweft.v1;
+
+import "kubeweft/v1/capability.proto";
+import "kubeweft/v1/common.proto";
+import "kubeweft/v1/resource.proto";
+
+// Field numbers are part of the wire contract. Removed field numbers must be
+// reserved and never reused.
+message Device {
+  DeviceId id = 1;
+  string name = 2;
+  repeated Capability capabilities = 3;
+  repeated Resource resources = 4;
+}

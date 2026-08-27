@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package kubeweft.v1;
+
+// Field numbers are part of the wire contract. Removed field numbers must be
+// reserved and never reused.
+
+message DeviceId {
+  string value = 1;
+}
+
+message CapabilityId {
+  string value = 1;
+}
+
+message ResourceId {
+  string value = 1;
+}
+
+message ApplicationId {
+  string value = 1;
+}
+
+message ServiceId {
+  string value = 1;
+}
+
+message PluginId {
+  string value = 1;
+}
+
+message PolicyId {
+  string value = 1;
+}
+
+message JobId {
+  string value = 1;
+}
+
+message EventId {
+  string value = 1;
+}

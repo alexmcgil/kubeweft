@@ -431,13 +431,13 @@ Use:
 Package namespace:
 
 ```text
-dev.kubeweft.android
+su.fack.kubeweft
 ```
 
 Suggested package layout:
 
 ```text
-dev.kubeweft.android
+su.fack.kubeweft
 ├── app
 ├── agent
 ├── capability

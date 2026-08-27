@@ -1,0 +1,13 @@
+[package]
+name = "kubeweft-agent-linux"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+kubeweft-agent-core = { path = "../../crates/kubeweft-agent-core" }
+
+[[bin]]
+name = "kubeweft-agent"
+path = "src/main.rs"

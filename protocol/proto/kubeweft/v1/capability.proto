@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package kubeweft.v1;
+
+import "kubeweft/v1/common.proto";
+
+// Field numbers are part of the wire contract. Removed field numbers must be
+// reserved and never reused.
+message Capability {
+  CapabilityId id = 1;
+  string name = 2;
+}
