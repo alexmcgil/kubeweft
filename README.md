@@ -4,7 +4,7 @@
 
 Kubeweft is a personal distributed operating layer for coordinating capabilities across user-owned devices. It describes devices, resources, applications, services, policies, and jobs without making a particular operating system or integration part of the core model.
 
-Kubeweft is **not Kubernetes**, a Kubernetes distribution, or a replacement for existing media, container, remote-desktop, or networking technologies. It does not yet implement networking, pairing, persistence, or platform capabilities.
+Kubeweft is **not Kubernetes**, a Kubernetes distribution, or a replacement for existing media, container, remote-desktop, or networking technologies. It does not yet implement networking, pairing, production persistence, or platform capabilities.
 
 ## Architecture in brief
 
@@ -15,6 +15,7 @@ The control plane discovers devices, authorizes capabilities, chooses placement,
 ## Layout
 
 - `crates/` — platform-independent Rust domain and orchestration boundaries.
+- `crates/kubeweft-filesystem/` — logical namespace, immutable content, placement, and replication core.
 - `agents/linux/` — Linux agent and future platform adapters.
 - `apps/cli/`, `apps/android/`, `apps/desktop/` — native client boundaries; desktop is documentation-only for now.
 - `protocol/` — transport-neutral protobuf and manifest schemas.

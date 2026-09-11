@@ -38,6 +38,12 @@ The control plane discovers devices, advertises capabilities, authorizes access,
 
 Large data should use a direct path whenever practical. For example, an Android device can issue a control request to a Linux PC, while a Sunshine/Moonlight stream flows directly from the Linux PC to Android. Likewise, a phone can submit a control request while a server streams DLNA media directly to a TV. Controllers coordinate existing mature technologies; they should not become unnecessary media or file proxies.
 
+## Logical filesystem
+
+Kubeweft exposes one cluster-owned namespace: paths and stable file identities do not contain placement information. Devices contribute content storage, while metadata and files belong to the cluster.
+
+Content is immutable and SHA-256-addressed. Writes advance metadata generations with compare-and-swap. Replication reconciles desired and actual copies, and an unavailable replica never removes the file from the namespace.
+
 ## Agents, adapters, and trust
 
 An agent hosts platform-independent coordination plus local adapters. Linux adapters may eventually map filesystem, process, systemd, container, PipeWire, or Sunshine mechanisms to capabilities. Android is a separate native Kotlin and Jetpack Compose client for the shared protocol; it does not consume Rust through JNI. Linux uses Rust agents and adapters. As Android integration grows, its process, service, registry, client, and Compose boundaries will remain native Kotlin and use Android APIs behind Android adapters.
