@@ -7,6 +7,7 @@ members = [
     "crates/kubeweft-scheduler",
     "crates/kubeweft-planner",
     "crates/kubeweft-agent-core",
+    "crates/kubeweft-filesystem",
     "crates/kubeweft-plugin-sdk",
     "crates/kubeweft-protocol",
     "apps/cli",
