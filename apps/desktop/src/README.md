@@ -1,3 +1,3 @@
-# Desktop Rust source boundary
+# Desktop bridge
 
-Future desktop Rust code owns client logic and a thin bridge to QML. It may use desktop-local Qt bridge code and platform-independent Kubeweft abstractions. It must not turn core crates into Qt consumers, host the cluster daemon, or embed Linux/Android adapter implementations.
+Qt-facing C++ code maps QML actions to the small Rust C ABI in `../bridge`. The bridge owns local client wiring; it does not turn core crates into Qt consumers or host the Linux agent.

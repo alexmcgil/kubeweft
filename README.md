@@ -17,7 +17,7 @@ The control plane discovers devices, authorizes capabilities, chooses placement,
 - `crates/` — platform-independent Rust domain and orchestration boundaries.
 - `crates/kubeweft-filesystem/` — logical namespace, immutable content, placement, and replication core.
 - `agents/linux/` — Linux agent and future platform adapters.
-- `apps/cli/`, `apps/android/`, `apps/desktop/` — native client boundaries; desktop is documentation-only for now.
+- `apps/cli/`, `apps/android/`, `apps/desktop/` — CLI, native Android, and Qt/QML clients.
 - `protocol/` — transport-neutral protobuf and manifest schemas.
 - `plugins/` — future out-of-process plugin boundary.
 - `nix/` — reproducible development and future Nix integration boundaries.
@@ -29,6 +29,7 @@ The top-level `just` recipes provide the repository checks. In the Nix developme
 
 ```sh
 just check
+just build
 just test
 just fmt
 just lint
@@ -38,7 +39,7 @@ just proto-check
 just android-check
 ```
 
-`android-check` requires an Android SDK. The desktop directory intentionally has no build command yet: it documents the future Qt 6/Qt Quick/QML boundary only.
+`just build` produces release CLI/agent binaries, the Qt desktop application, and an Android debug APK. Android builds require SDK platform 35 via `ANDROID_HOME` or `ANDROID_SDK_ROOT`. CLI and desktop share local state through `KUBEWEFT_DATA_DIR` (default: the platform application-data directory).
 
 ## Contributing and security
 

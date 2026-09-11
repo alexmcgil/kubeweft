@@ -6,6 +6,7 @@ use std::{
     sync::{Arc, Mutex, RwLock},
 };
 
+use fs2::FileExt;
 use kubeweft_model::DeviceId;
 
 use crate::{ContentId, FilesystemError, StorageNode};
@@ -123,6 +124,16 @@ impl LocalContentStore {
         )
     }
 
+    fn lock_file(&self) -> Result<fs::File, FilesystemError> {
+        fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(self.root.join(".lock"))
+            .map_err(FilesystemError::from)
+    }
+
     fn used_space(&self) -> Result<u64, FilesystemError> {
         fs::read_dir(&self.root)?.try_fold(0_u64, |total, entry| {
             let metadata = entry?.metadata()?;
@@ -143,6 +154,8 @@ impl ContentStore for LocalContentStore {
             .write_lock
             .lock()
             .map_err(|_| FilesystemError::Storage("content lock poisoned".into()))?;
+        let lock = self.lock_file()?;
+        FileExt::lock_exclusive(&lock)?;
         if destination.exists() {
             let existing = fs::read(&destination)?;
             if content_id.matches(&existing) {
@@ -177,6 +190,12 @@ impl ContentStore for LocalContentStore {
     }
 
     fn delete(&self, content_id: &ContentId) -> Result<(), FilesystemError> {
+        let _guard = self
+            .write_lock
+            .lock()
+            .map_err(|_| FilesystemError::Storage("content lock poisoned".into()))?;
+        let lock = self.lock_file()?;
+        FileExt::lock_exclusive(&lock)?;
         match fs::remove_file(self.path_for(content_id)) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),

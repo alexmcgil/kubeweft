@@ -13,6 +13,9 @@
       in
       {
         devShells.default = pkgs.mkShell {
+          QT_PLUGIN_PATH = "${pkgs.qt6.qtbase}/lib/qt-6/plugins";
+          QML_IMPORT_PATH = "${pkgs.qt6.qtdeclarative}/lib/qt-6/qml";
+          QML2_IMPORT_PATH = "${pkgs.qt6.qtdeclarative}/lib/qt-6/qml";
           packages = with pkgs; [
             cargo
             rustc

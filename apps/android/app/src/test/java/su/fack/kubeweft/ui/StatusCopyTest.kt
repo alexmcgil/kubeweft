@@ -11,4 +11,12 @@ class StatusCopyTest {
             statusCopy(),
         )
     }
+
+    @Test
+    fun previewShowsOneLogicalHome() {
+        assertEquals(
+            listOf("Documents", "Downloads", "Projects", "Photos", "hello.txt"),
+            previewNamespace().map { it.name },
+        )
+    }
 }
