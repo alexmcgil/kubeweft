@@ -1,5 +1,10 @@
-# Desktop boundary
+# Kubeweft desktop
 
-This is a documentation-only future desktop application boundary; it is not part of the current build. It owns Qt 6, Qt Quick, QML, and the thin Qt/Rust bridge. Its intended flow is `QML UI -> bridge -> desktop client logic -> local kubeweft-agent IPC`.
+The desktop application is a Qt 6/Qt Quick filesystem browser backed by the Rust filesystem core through a thin C ABI bridge. Build it from the repository development shell with:
 
-It may depend on desktop-local code and platform-independent client/core abstractions, but core crates must never depend on Qt. It does not host the cluster daemon, implement the Linux agent, or make closing the UI stop the agent.
+```sh
+just desktop-build
+./target/desktop/kubeweft-desktop
+```
+
+It currently opens persistent local development state. Agent IPC replaces this in a later networking iteration; the core crates remain independent from Qt.

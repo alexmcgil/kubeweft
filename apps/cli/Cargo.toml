@@ -8,3 +8,7 @@ license.workspace = true
 [[bin]]
 name = "kubeweft"
 path = "src/main.rs"
+
+[dependencies]
+kubeweft-filesystem = { path = "../../crates/kubeweft-filesystem" }
+kubeweft-local = { path = "../../crates/kubeweft-local" }

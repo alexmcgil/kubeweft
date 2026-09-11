@@ -1,0 +1,6 @@
+<RCC>
+    <qresource prefix="/qt/qml/Kubeweft">
+        <file alias="Main.qml">qml/Main.qml</file>
+        <file alias="KButton.qml">qml/KButton.qml</file>
+    </qresource>
+</RCC>

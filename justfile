@@ -1,6 +1,20 @@
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
-check: fmt-check lint rust-check rust-test proto-check
+check: fmt-check lint rust-check rust-test proto-check desktop-check
+
+build: x86-build desktop-build android-build
+
+x86-build:
+    cargo build --release -p kubeweft-cli -p kubeweft-agent-linux
+
+desktop-build:
+    cargo build --release -p kubeweft-desktop-bridge
+    mkdir -p target/desktop-build target/desktop
+    qmake6 apps/desktop/kubeweft-desktop.pro -o target/desktop-build/Makefile
+    make -C target/desktop-build
+
+desktop-check: desktop-build
+    status=0; QT_QPA_PLATFORM=offscreen timeout 2 target/desktop/kubeweft-desktop >/dev/null 2>&1 || status=$?; if [[ "$status" != 124 ]]; then echo "desktop smoke test failed with status $status" >&2; exit "$status"; fi
 
 test: rust-test
 
@@ -31,3 +45,5 @@ android-check:
         exit 1; \
     fi
     ./apps/android/gradlew -p apps/android testDebugUnitTest lintDebug assembleDebug
+
+android-build: android-check
