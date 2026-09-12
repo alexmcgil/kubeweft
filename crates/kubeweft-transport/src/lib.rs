@@ -8,7 +8,9 @@ mod client;
 mod discovery;
 mod domain;
 mod error;
+mod identity;
 mod local_ipc;
+mod secure;
 mod store;
 mod wire;
 

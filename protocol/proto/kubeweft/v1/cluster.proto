@@ -10,6 +10,28 @@ message Cluster {
   ClusterId id = 1;
   string name = 2;
   string coordinator_endpoint = 3;
+  DeviceId coordinator_device_id = 4;
+}
+
+enum DeviceIdentitySuite {
+  DEVICE_IDENTITY_SUITE_UNSPECIFIED = 0;
+  DEVICE_IDENTITY_SUITE_X25519 = 1;
+}
+
+// A stable device identity is derived from this public key. Private keys never
+// enter the language-neutral control protocol.
+message DeviceIdentity {
+  DeviceId device_id = 1;
+  DeviceIdentitySuite suite = 2;
+  bytes public_key = 3;
+}
+
+// Semantic contents of the opaque pairing code shown to a user.
+message PairingInvitation {
+  uint32 version = 1;
+  ClusterId cluster_id = 2;
+  DeviceId coordinator_device_id = 3;
+  bytes one_time_secret = 4;
 }
 
 enum ClusterRole {

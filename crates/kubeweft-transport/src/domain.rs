@@ -5,6 +5,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use kubeweft_model::DeviceId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -79,6 +80,7 @@ pub struct ClusterSummary {
     pub id: ClusterId,
     pub name: String,
     pub coordinator: SocketAddr,
+    pub coordinator_device_id: DeviceId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,6 +125,7 @@ pub(crate) struct StoredCluster {
     pub id: ClusterId,
     pub name: String,
     pub coordinator: SocketAddr,
+    pub coordinator_device_id: DeviceId,
     pub role: ClusterRole,
     pub credential: String,
     pub invite_token: Option<String>,
@@ -137,6 +140,7 @@ impl StoredCluster {
             id: self.id,
             name: self.name.clone(),
             coordinator: self.coordinator,
+            coordinator_device_id: self.coordinator_device_id.clone(),
         }
     }
 
@@ -159,6 +163,8 @@ pub(crate) struct PendingJoin {
     pub coordinator: SocketAddr,
     pub invite_token: String,
     pub request_id: JoinRequestId,
+    pub cluster_id: ClusterId,
+    pub coordinator_device_id: DeviceId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,13 +174,53 @@ pub(crate) struct AcceptedJoin {
     pub credential: String,
 }
 
-pub(crate) fn new_secret() -> String {
-    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct PairingInvitation {
+    version: u8,
+    pub cluster_id: ClusterId,
+    pub coordinator_device_id: DeviceId,
+    secret: String,
 }
 
-pub(crate) fn new_device_id() -> DeviceId {
-    DeviceId::new(format!("device.{}", Uuid::new_v4().simple()))
-        .expect("UUID device identifier is valid")
+impl PairingInvitation {
+    const PREFIX: &'static str = "kwpair1.";
+
+    pub fn new(cluster_id: ClusterId, coordinator_device_id: DeviceId) -> Self {
+        Self {
+            version: 1,
+            cluster_id,
+            coordinator_device_id,
+            secret: new_secret(),
+        }
+    }
+
+    pub fn encode(&self) -> Result<String, crate::TransportError> {
+        let payload = serde_json::to_vec(self)?;
+        Ok(format!(
+            "{}{}",
+            Self::PREFIX,
+            URL_SAFE_NO_PAD.encode(payload)
+        ))
+    }
+
+    pub fn decode(encoded: &str) -> Result<Self, crate::TransportError> {
+        let payload = encoded
+            .strip_prefix(Self::PREFIX)
+            .ok_or(crate::TransportError::InvalidInvite)?;
+        let bytes = URL_SAFE_NO_PAD
+            .decode(payload)
+            .map_err(|_| crate::TransportError::InvalidInvite)?;
+        let invitation: Self =
+            serde_json::from_slice(&bytes).map_err(|_| crate::TransportError::InvalidInvite)?;
+        if invitation.version != 1 || invitation.secret.len() < 32 {
+            return Err(crate::TransportError::InvalidInvite);
+        }
+        Ok(invitation)
+    }
+}
+
+pub(crate) fn new_secret() -> String {
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
 
 pub(crate) fn now_millis() -> u64 {

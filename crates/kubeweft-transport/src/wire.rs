@@ -1,7 +1,6 @@
 use std::{
     io::{Read, Write},
-    net::{SocketAddr, TcpStream},
-    time::Duration,
+    net::SocketAddr,
 };
 
 use kubeweft_model::DeviceId;
@@ -9,9 +8,10 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
     ClusterId, ClusterMember, ClusterSummary, JoinRequestId, MembershipStatus, TransportError,
+    identity::LocalDeviceIdentity, secure::SecurePeerStream,
 };
 
-pub(crate) const PROTOCOL_VERSION: u16 = 2;
+pub(crate) const PROTOCOL_VERSION: u16 = 3;
 const MAX_FRAME_SIZE: usize = 1024 * 1024;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -40,7 +40,6 @@ pub(crate) enum LocalRequest {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum RemoteRequest {
-    Ping,
     RemoteJoin {
         invite_token: String,
         member: ClusterMember,
@@ -62,9 +61,6 @@ pub(crate) struct ResponseEnvelope {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum ControlResponse {
-    Pong {
-        status: MembershipStatus,
-    },
     Status {
         status: MembershipStatus,
     },
@@ -95,26 +91,16 @@ pub(crate) enum ControlResponse {
 
 pub(crate) fn send_request(
     endpoint: SocketAddr,
+    identity: &LocalDeviceIdentity,
+    expected_remote: &DeviceId,
     request: RemoteRequest,
 ) -> Result<ControlResponse, TransportError> {
-    let mut stream = TcpStream::connect_timeout(&endpoint, Duration::from_secs(3)).map_err(
-        |error| match error.kind() {
-            std::io::ErrorKind::ConnectionRefused
-            | std::io::ErrorKind::TimedOut
-            | std::io::ErrorKind::NotFound => TransportError::AgentUnavailable,
-            _ => error.into(),
-        },
-    )?;
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-    write_frame(
-        &mut stream,
-        &RequestEnvelope {
-            version: PROTOCOL_VERSION,
-            request,
-        },
-    )?;
-    let response: ResponseEnvelope = read_frame(&mut stream)?;
+    let mut stream = SecurePeerStream::connect(endpoint, identity, expected_remote)?;
+    stream.write(&RequestEnvelope {
+        version: PROTOCOL_VERSION,
+        request,
+    })?;
+    let response: ResponseEnvelope = stream.read()?;
     if response.version != PROTOCOL_VERSION {
         return Err(TransportError::InvalidMessage(format!(
             "unsupported response protocol version {}",

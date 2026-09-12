@@ -157,17 +157,17 @@ fn run_cluster(mut arguments: Vec<OsString>, data_directory: PathBuf) -> Result<
             let (cluster, invite_token) = client.create_cluster(name)?;
             println!("cluster\t{}\t{}", cluster.id, cluster.name);
             println!("coordinator\t{}", cluster.coordinator);
-            println!("invite\t{invite_token}");
+            println!("pairing\t{invite_token}");
         }
         "invite" => {
             ensure_empty(&arguments)?;
-            println!("invite\t{}", client.create_invite()?);
+            println!("pairing\t{}", client.create_invite()?);
         }
         "join" => {
             let coordinator = take_utf8(&mut arguments, "coordinator endpoint")?
                 .parse()
                 .map_err(|_| CliError::Usage("invalid coordinator endpoint".into()))?;
-            let invite_token = take_utf8(&mut arguments, "invite token")?;
+            let invite_token = take_utf8(&mut arguments, "pairing code")?;
             ensure_empty(&arguments)?;
             let cluster = client.join_cluster(coordinator, invite_token)?;
             println!("cluster\t{}\t{}", cluster.id, cluster.name);
@@ -322,7 +322,7 @@ fn print_help() {
     println!("kubeweft [--data-dir DIR] <fs|cluster> <command>");
     println!("filesystem: init [USER], mkdir PATH, create PATH, ls [PATH], stat PATH");
     println!("          cat PATH, write PATH [--expect GENERATION], mv FROM TO, rm PATH");
-    println!("cluster:  status, create NAME, invite, join ENDPOINT TOKEN, members");
+    println!("cluster:  status, create NAME, invite, join ENDPOINT PAIRING_CODE, members");
     println!("          discover [--port PORT] [--timeout-ms MILLISECONDS]");
 }
 

@@ -8,7 +8,7 @@ use std::{
 use fs2::FileExt;
 use serde::Serialize;
 
-use crate::{AgentState, TransportError, domain::new_device_id};
+use crate::{AgentState, TransportError, identity::LocalDeviceIdentity};
 
 pub(crate) struct AgentDirectoryLock {
     _file: fs::File,
@@ -29,6 +29,7 @@ impl ClusterStore {
         let data_directory = data_directory.as_ref();
         fs::create_dir_all(data_directory)?;
         set_private_directory_permissions(data_directory)?;
+        let identity = LocalDeviceIdentity::load_or_create(data_directory)?;
         let store = Self {
             state_path: data_directory.join("cluster.json"),
             lock_path: data_directory.join("cluster.lock"),
@@ -50,13 +51,18 @@ impl ClusterStore {
                 )?;
                 store.write_state(&AgentState {
                     revision: 0,
-                    device_id: new_device_id(),
+                    device_id: identity.device_id(),
                     device_name: name,
                     cluster: None,
                     pending_join: None,
                 })?;
             } else {
-                store.read_state()?;
+                let state = store.read_state()?;
+                if state.device_id != identity.device_id() {
+                    return Err(TransportError::InvalidIdentity(
+                        "cluster state is bound to a different private key".into(),
+                    ));
+                }
             }
         }
         Ok(store)
