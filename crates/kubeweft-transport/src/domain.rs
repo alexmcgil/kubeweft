@@ -18,6 +18,27 @@ impl ClusterId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct JoinRequestId(Uuid);
+
+impl JoinRequestId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
+impl Default for JoinRequestId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Display for JoinRequestId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
 impl Default for ClusterId {
     fn default() -> Self {
         Self::new()
@@ -74,6 +95,8 @@ pub struct AgentState {
     pub(crate) device_id: DeviceId,
     pub(crate) device_name: String,
     pub(crate) cluster: Option<StoredCluster>,
+    #[serde(default)]
+    pub(crate) pending_join: Option<PendingJoin>,
 }
 
 impl AgentState {
@@ -104,6 +127,8 @@ pub(crate) struct StoredCluster {
     pub credential: String,
     pub invite_token: Option<String>,
     pub members: Vec<StoredMember>,
+    #[serde(default)]
+    pub accepted_joins: Vec<AcceptedJoin>,
 }
 
 impl StoredCluster {
@@ -126,6 +151,20 @@ impl StoredCluster {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct StoredMember {
     pub member: ClusterMember,
+    pub credential: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct PendingJoin {
+    pub coordinator: SocketAddr,
+    pub invite_token: String,
+    pub request_id: JoinRequestId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct AcceptedJoin {
+    pub request_id: JoinRequestId,
+    pub device_id: DeviceId,
     pub credential: String,
 }
 

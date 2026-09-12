@@ -1,9 +1,10 @@
 use std::{
+    fs,
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream},
     path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread::{self, JoinHandle},
     time::Duration,
@@ -12,10 +13,12 @@ use std::{
 use crate::{
     ClusterId, ClusterMember, ClusterRole, ClusterStore, TransportError,
     discovery::{DEFAULT_DISCOVERY_PORT, discovery_sender_socket, run_discovery},
-    domain::{StoredCluster, StoredMember, new_secret, now_millis},
+    domain::{AcceptedJoin, PendingJoin, StoredCluster, StoredMember, new_secret, now_millis},
+    local_ipc::{LocalListener, LocalStream, bind as bind_local, socket_path},
+    store::AgentDirectoryLock,
     wire::{
-        ControlRequest, ControlResponse, PROTOCOL_VERSION, RequestEnvelope, ResponseEnvelope,
-        read_frame, send_request, write_frame,
+        ControlResponse, LocalRequest, PROTOCOL_VERSION, RemoteRequest, RequestEnvelope,
+        ResponseEnvelope, read_frame, send_request, write_frame,
     },
 };
 
@@ -26,6 +29,14 @@ pub struct AgentConfig {
     pub advertise: Option<SocketAddr>,
     pub discovery_port: Option<u16>,
     pub device_name: Option<String>,
+    /// Required acknowledgement while the peer transport is plaintext.
+    pub insecure_plaintext_lan: bool,
+    /// Development fault injection used to prove idempotent join retries.
+    #[doc(hidden)]
+    pub drop_remote_join_responses: usize,
+    /// Development fault injection for a crash after remote acceptance.
+    #[doc(hidden)]
+    pub fail_join_after_remote_accepts: usize,
 }
 
 impl AgentConfig {
@@ -36,6 +47,9 @@ impl AgentConfig {
             advertise: None,
             discovery_port: Some(DEFAULT_DISCOVERY_PORT),
             device_name: None,
+            insecure_plaintext_lan: false,
+            drop_remote_join_responses: 0,
+            fail_join_after_remote_accepts: 0,
         }
     }
 }
@@ -43,31 +57,56 @@ impl AgentConfig {
 pub struct AgentHandle {
     endpoint: SocketAddr,
     advertised_endpoint: SocketAddr,
+    local_socket_path: PathBuf,
     shutdown: Arc<AtomicBool>,
     threads: Vec<JoinHandle<Result<(), TransportError>>>,
+    _directory_lock: AgentDirectoryLock,
 }
 
 impl AgentHandle {
     pub fn start(config: AgentConfig) -> Result<Self, TransportError> {
+        let directory_lock = ClusterStore::acquire_agent_lock(&config.data_directory)?;
+        require_plaintext_opt_in(&config)?;
         let store = ClusterStore::open(&config.data_directory, config.device_name.as_deref())?;
-        let listener = TcpListener::bind(config.listen)?;
-        listener.set_nonblocking(true)?;
-        let endpoint = listener.local_addr()?;
-        let local_endpoint = loopback_endpoint(endpoint);
-        store.write_runtime_endpoint(local_endpoint)?;
+
+        let local_socket_path = socket_path(&config.data_directory);
+        let local_listener = bind_local(&local_socket_path)?;
+        let remote_listener = TcpListener::bind(config.listen)?;
+        remote_listener.set_nonblocking(true)?;
+        let endpoint = remote_listener.local_addr()?;
         let advertised_endpoint = advertised_endpoint(config.advertise, endpoint)?;
         let shutdown = Arc::new(AtomicBool::new(false));
         let discovery_socket = config
             .discovery_port
             .map(|_| discovery_sender_socket())
             .transpose()?;
+        let dropped_join_responses = Arc::new(AtomicUsize::new(config.drop_remote_join_responses));
+        let failed_local_join_commits =
+            Arc::new(AtomicUsize::new(config.fail_join_after_remote_accepts));
 
-        let tcp_store = store.clone();
-        let tcp_shutdown = Arc::clone(&shutdown);
-        let tcp_thread = thread::spawn(move || {
-            run_control_listener(listener, tcp_store, advertised_endpoint, tcp_shutdown)
+        let local_store = store.clone();
+        let local_shutdown = Arc::clone(&shutdown);
+        let local_thread = thread::spawn(move || {
+            run_local_listener(
+                local_listener,
+                local_store,
+                advertised_endpoint,
+                local_shutdown,
+                failed_local_join_commits,
+            )
         });
-        let mut threads = vec![tcp_thread];
+
+        let remote_store = store.clone();
+        let remote_shutdown = Arc::clone(&shutdown);
+        let remote_thread = thread::spawn(move || {
+            run_remote_listener(
+                remote_listener,
+                remote_store,
+                remote_shutdown,
+                dropped_join_responses,
+            )
+        });
+        let mut threads = vec![local_thread, remote_thread];
         if let (Some(discovery_port), Some(discovery_socket)) =
             (config.discovery_port, discovery_socket)
         {
@@ -85,10 +124,12 @@ impl AgentHandle {
         }
 
         Ok(Self {
-            endpoint: local_endpoint,
+            endpoint,
             advertised_endpoint,
+            local_socket_path,
             shutdown,
             threads,
+            _directory_lock: directory_lock,
         })
     }
 
@@ -101,31 +142,43 @@ impl AgentHandle {
     }
 
     pub fn wait(mut self) -> Result<(), TransportError> {
-        join_threads(&mut self.threads)
+        let result = join_threads(&mut self.threads);
+        remove_local_socket(&self.local_socket_path);
+        result
     }
 
     pub fn shutdown(mut self) -> Result<(), TransportError> {
         self.shutdown.store(true, Ordering::Relaxed);
-        join_threads(&mut self.threads)
+        let result = join_threads(&mut self.threads);
+        remove_local_socket(&self.local_socket_path);
+        result
     }
 }
 
 impl Drop for AgentHandle {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
+        let _ = join_threads(&mut self.threads);
+        remove_local_socket(&self.local_socket_path);
     }
 }
 
-fn run_control_listener(
-    listener: TcpListener,
+fn run_local_listener(
+    listener: LocalListener,
     store: ClusterStore,
     advertised_endpoint: SocketAddr,
     shutdown: Arc<AtomicBool>,
+    failed_local_join_commits: Arc<AtomicUsize>,
 ) -> Result<(), TransportError> {
     while !shutdown.load(Ordering::Relaxed) {
         match listener.accept() {
-            Ok((stream, peer)) => {
-                let _ = handle_connection(stream, peer, &store, advertised_endpoint);
+            Ok((stream, _)) => {
+                let _ = handle_local_connection(
+                    stream,
+                    &store,
+                    advertised_endpoint,
+                    &failed_local_join_commits,
+                );
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(20));
@@ -136,27 +189,79 @@ fn run_control_listener(
     Ok(())
 }
 
-fn handle_connection(
-    mut stream: TcpStream,
-    peer: SocketAddr,
+fn handle_local_connection(
+    mut stream: LocalStream,
     store: &ClusterStore,
     advertised_endpoint: SocketAddr,
+    failed_local_join_commits: &AtomicUsize,
+) -> Result<(), TransportError> {
+    let response = match read_frame::<RequestEnvelope<LocalRequest>>(&mut stream) {
+        Ok(envelope) if envelope.version == PROTOCOL_VERSION => dispatch_local(
+            envelope.request,
+            store,
+            advertised_endpoint,
+            failed_local_join_commits,
+        )
+        .unwrap_or_else(error_response),
+        Ok(envelope) => unsupported_version(envelope.version),
+        Err(error) => error_response(error),
+    };
+    write_response(&mut stream, response)
+}
+
+fn run_remote_listener(
+    listener: TcpListener,
+    store: ClusterStore,
+    shutdown: Arc<AtomicBool>,
+    dropped_join_responses: Arc<AtomicUsize>,
+) -> Result<(), TransportError> {
+    while !shutdown.load(Ordering::Relaxed) {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                let _ = handle_remote_connection(stream, &store, &dropped_join_responses);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+fn handle_remote_connection(
+    mut stream: TcpStream,
+    store: &ClusterStore,
+    dropped_join_responses: &AtomicUsize,
 ) -> Result<(), TransportError> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-    let response = match read_frame::<RequestEnvelope>(&mut stream) {
-        Ok(envelope) if envelope.version == PROTOCOL_VERSION => {
-            dispatch(envelope.request, peer, store, advertised_endpoint)
-                .unwrap_or_else(error_response)
-        }
-        Ok(envelope) => ControlResponse::Error {
-            code: "unsupported_version".into(),
-            message: format!("unsupported protocol version {}", envelope.version),
-        },
-        Err(error) => error_response(error),
+    let envelope = match read_frame::<RequestEnvelope<RemoteRequest>>(&mut stream) {
+        Ok(envelope) if envelope.version == PROTOCOL_VERSION => envelope,
+        Ok(envelope) => return write_response(&mut stream, unsupported_version(envelope.version)),
+        Err(error) => return write_response(&mut stream, error_response(error)),
     };
+    let is_join = matches!(envelope.request, RemoteRequest::RemoteJoin { .. });
+    let response = dispatch_remote(envelope.request, store).unwrap_or_else(error_response);
+    if is_join
+        && matches!(response, ControlResponse::JoinAccepted { .. })
+        && dropped_join_responses
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_ok()
+    {
+        return Ok(());
+    }
+    write_response(&mut stream, response)
+}
+
+fn write_response(
+    stream: &mut impl std::io::Write,
+    response: ControlResponse,
+) -> Result<(), TransportError> {
     write_frame(
-        &mut stream,
+        stream,
         &ResponseEnvelope {
             version: PROTOCOL_VERSION,
             response,
@@ -164,46 +269,46 @@ fn handle_connection(
     )
 }
 
-fn dispatch(
-    request: ControlRequest,
-    peer: SocketAddr,
+fn dispatch_local(
+    request: LocalRequest,
     store: &ClusterStore,
     advertised_endpoint: SocketAddr,
+    failed_local_join_commits: &AtomicUsize,
 ) -> Result<ControlResponse, TransportError> {
     match request {
-        ControlRequest::Ping => Ok(ControlResponse::Pong {
+        LocalRequest::LocalStatus => Ok(ControlResponse::Status {
             status: store.load()?.status(),
         }),
-        ControlRequest::LocalStatus => {
-            require_loopback(peer)?;
-            Ok(ControlResponse::Status {
-                status: store.load()?.status(),
-            })
-        }
-        ControlRequest::CreateCluster { name } => {
-            require_loopback(peer)?;
-            create_cluster(store, advertised_endpoint, name)
-        }
-        ControlRequest::CreateInvite => {
-            require_loopback(peer)?;
-            create_invite(store)
-        }
-        ControlRequest::JoinCluster {
+        LocalRequest::CreateCluster { name } => create_cluster(store, advertised_endpoint, name),
+        LocalRequest::CreateInvite => create_invite(store),
+        LocalRequest::JoinCluster {
             coordinator,
             invite_token,
-        } => {
-            require_loopback(peer)?;
-            join_cluster(store, advertised_endpoint, coordinator, invite_token)
-        }
-        ControlRequest::LocalMembers => {
-            require_loopback(peer)?;
-            local_members(store)
-        }
-        ControlRequest::RemoteJoin {
+        } => join_cluster(
+            store,
+            advertised_endpoint,
+            coordinator,
+            invite_token,
+            failed_local_join_commits,
+        ),
+        LocalRequest::LocalMembers => local_members(store),
+    }
+}
+
+fn dispatch_remote(
+    request: RemoteRequest,
+    store: &ClusterStore,
+) -> Result<ControlResponse, TransportError> {
+    match request {
+        RemoteRequest::Ping => Ok(ControlResponse::Pong {
+            status: store.load()?.status(),
+        }),
+        RemoteRequest::RemoteJoin {
             invite_token,
             member,
-        } => accept_member(store, invite_token, member),
-        ControlRequest::RemoteMembers {
+            join_request_id,
+        } => accept_member(store, invite_token, member, join_request_id),
+        RemoteRequest::RemoteMembers {
             cluster_id,
             device_id,
             credential,
@@ -223,6 +328,9 @@ fn create_cluster(
         if state.cluster.is_some() {
             return Err(TransportError::AlreadyInCluster);
         }
+        if state.pending_join.is_some() {
+            return Err(TransportError::Conflict);
+        }
         let cluster = StoredCluster {
             id: ClusterId::new(),
             name: name.clone(),
@@ -239,6 +347,7 @@ fn create_cluster(
                 },
                 credential: own_credential.clone(),
             }],
+            accepted_joins: Vec::new(),
         };
         let summary = cluster.summary();
         state.cluster = Some(cluster);
@@ -268,24 +377,71 @@ fn join_cluster(
     endpoint: SocketAddr,
     coordinator: SocketAddr,
     invite_token: String,
+    fail_after_remote_accepts: &AtomicUsize,
 ) -> Result<ControlResponse, TransportError> {
-    let state = store.load()?;
-    if state.cluster.is_some() {
+    let existing = store.load()?;
+    if let Some(cluster) = existing.cluster {
+        if cluster.coordinator == coordinator {
+            return Ok(ControlResponse::Joined {
+                cluster: cluster.summary(),
+            });
+        }
         return Err(TransportError::AlreadyInCluster);
     }
+
+    let pending = store.update(|state| {
+        if state.cluster.is_some() {
+            return Err(TransportError::AlreadyInCluster);
+        }
+        match &state.pending_join {
+            Some(pending)
+                if pending.coordinator == coordinator && pending.invite_token == invite_token =>
+            {
+                Ok(pending.clone())
+            }
+            Some(_) => Err(TransportError::Conflict),
+            None => {
+                let pending = PendingJoin {
+                    coordinator,
+                    invite_token: invite_token.clone(),
+                    request_id: crate::JoinRequestId::new(),
+                };
+                state.pending_join = Some(pending.clone());
+                Ok(pending)
+            }
+        }
+    })?;
+    let state = store.load()?;
     let member = ClusterMember {
         device_id: state.device_id.clone(),
         device_name: state.device_name.clone(),
         endpoint,
         joined_at_millis: now_millis(),
     };
-    let response = send_request(
+    let response = match send_request(
         coordinator,
-        ControlRequest::RemoteJoin {
-            invite_token,
+        RemoteRequest::RemoteJoin {
+            invite_token: pending.invite_token.clone(),
             member,
+            join_request_id: pending.request_id,
         },
-    )?;
+    ) {
+        Ok(response) => response,
+        Err(error @ TransportError::Remote { .. }) => {
+            store.update(|state| {
+                if state
+                    .pending_join
+                    .as_ref()
+                    .is_some_and(|current| current.request_id == pending.request_id)
+                {
+                    state.pending_join = None;
+                }
+                Ok(())
+            })?;
+            return Err(error);
+        }
+        Err(error) => return Err(error),
+    };
     let ControlResponse::JoinAccepted {
         cluster,
         credential,
@@ -296,10 +452,33 @@ fn join_cluster(
             "coordinator returned an unexpected join response".into(),
         ));
     };
+    if fail_after_remote_accepts
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
+            remaining.checked_sub(1)
+        })
+        .is_ok()
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::ConnectionAborted,
+            "injected failure after coordinator accepted join",
+        )
+        .into());
+    }
     let saved_cluster = cluster.clone();
     store.update(|state| {
-        if state.cluster.is_some() {
+        if let Some(existing) = &state.cluster {
+            if existing.id == saved_cluster.id {
+                state.pending_join = None;
+                return Ok(());
+            }
             return Err(TransportError::AlreadyInCluster);
+        }
+        if state
+            .pending_join
+            .as_ref()
+            .is_none_or(|current| current.request_id != pending.request_id)
+        {
+            return Err(TransportError::Conflict);
         }
         state.cluster = Some(StoredCluster {
             id: saved_cluster.id,
@@ -316,7 +495,9 @@ fn join_cluster(
                     credential: String::new(),
                 })
                 .collect(),
+            accepted_joins: Vec::new(),
         });
+        state.pending_join = None;
         Ok(())
     })?;
     Ok(ControlResponse::Joined { cluster })
@@ -326,13 +507,28 @@ fn accept_member(
     store: &ClusterStore,
     invite_token: String,
     member: ClusterMember,
+    join_request_id: crate::JoinRequestId,
 ) -> Result<ControlResponse, TransportError> {
     validate_member(&member)?;
     let credential = new_secret();
-    let (cluster, members) = store.update(|state| {
+    let (cluster, credential, members) = store.update(|state| {
         let cluster = state.cluster.as_mut().ok_or(TransportError::NotInCluster)?;
         if cluster.role != ClusterRole::Coordinator {
             return Err(TransportError::NotCoordinator);
+        }
+        if let Some(accepted) = cluster
+            .accepted_joins
+            .iter()
+            .find(|accepted| accepted.request_id == join_request_id)
+        {
+            if accepted.device_id != member.device_id {
+                return Err(TransportError::InvalidInvite);
+            }
+            return Ok((
+                cluster.summary(),
+                accepted.credential.clone(),
+                cluster.public_members(),
+            ));
         }
         if cluster.invite_token.as_deref() != Some(invite_token.as_str()) {
             return Err(TransportError::InvalidInvite);
@@ -348,8 +544,17 @@ fn accept_member(
             member: member.clone(),
             credential: credential.clone(),
         });
+        cluster.accepted_joins.push(AcceptedJoin {
+            request_id: join_request_id,
+            device_id: member.device_id,
+            credential: credential.clone(),
+        });
         cluster.invite_token = None;
-        Ok((cluster.summary(), cluster.public_members()))
+        Ok((
+            cluster.summary(),
+            credential.clone(),
+            cluster.public_members(),
+        ))
     })?;
     Ok(ControlResponse::JoinAccepted {
         cluster,
@@ -369,7 +574,7 @@ fn local_members(store: &ClusterStore) -> Result<ControlResponse, TransportError
     }
     send_request(
         cluster.coordinator,
-        ControlRequest::RemoteMembers {
+        RemoteRequest::RemoteMembers {
             cluster_id: cluster.id,
             device_id: state.device_id,
             credential: cluster.credential,
@@ -402,12 +607,16 @@ fn remote_members(
     })
 }
 
-fn require_loopback(peer: SocketAddr) -> Result<(), TransportError> {
-    if peer.ip().is_loopback() {
-        Ok(())
-    } else {
-        Err(TransportError::Unauthorized)
+fn require_plaintext_opt_in(config: &AgentConfig) -> Result<(), TransportError> {
+    let advertised_non_loopback = config
+        .advertise
+        .is_some_and(|address| address.ip().is_unspecified() || !address.ip().is_loopback());
+    if (!config.listen.ip().is_loopback() || advertised_non_loopback)
+        && !config.insecure_plaintext_lan
+    {
+        return Err(TransportError::InsecurePlaintextLanOptInRequired);
     }
+    Ok(())
 }
 
 fn validate_cluster_name(name: String) -> Result<String, TransportError> {
@@ -437,6 +646,13 @@ fn validate_member(member: &ClusterMember) -> Result<(), TransportError> {
     Ok(())
 }
 
+fn unsupported_version(version: u16) -> ControlResponse {
+    ControlResponse::Error {
+        code: "unsupported_version".into(),
+        message: format!("unsupported protocol version {version}"),
+    }
+}
+
 fn error_response(error: TransportError) -> ControlResponse {
     if let TransportError::Remote { code, message } = error {
         return ControlResponse::Error { code, message };
@@ -444,6 +660,8 @@ fn error_response(error: TransportError) -> ControlResponse {
     let message = error.to_string();
     let code = match error {
         TransportError::AgentUnavailable => "agent_unavailable",
+        TransportError::AgentAlreadyRunning => "agent_already_running",
+        TransportError::InsecurePlaintextLanOptInRequired => "insecure_plaintext_lan_opt_in",
         TransportError::NotCoordinator => "not_coordinator",
         TransportError::AlreadyInCluster => "already_in_cluster",
         TransportError::NotInCluster => "not_in_cluster",
@@ -486,6 +704,17 @@ fn loopback_endpoint(endpoint: SocketAddr) -> SocketAddr {
         }
     } else {
         endpoint
+    }
+}
+
+fn remove_local_socket(path: &std::path::Path) {
+    if let Err(error) = fs::remove_file(path)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        eprintln!(
+            "failed to remove local control socket {}: {error}",
+            path.display()
+        );
     }
 }
 

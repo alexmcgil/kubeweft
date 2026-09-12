@@ -1,13 +1,19 @@
 use std::{
+    collections::BTreeMap,
     sync::Arc,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use kubeweft_filesystem::{
-    Availability, ContentStore, ContentStoreRegistry, DurabilityStatus, EntryMetadata,
-    FilesystemError, FilesystemEvent, FilesystemService, InMemoryContentStore,
-    InMemoryMetadataStore, LocalContentStore, LocalMetadataStore, MetadataStore, NetworkKind,
-    PowerSource, RecordingEventSink, ReplicaState, StorageNode,
+    Availability, ContentId, ContentPlacement, ContentRetention, ContentStore,
+    ContentStoreRegistry, DefaultPlacementPolicy, DurabilityStatus, EntryMetadata, FilesystemError,
+    FilesystemEvent, FilesystemService, InMemoryContentStore, InMemoryMetadataStore,
+    LocalContentStore, LocalMetadataStore, MetadataSnapshot, MetadataStore, NetworkKind,
+    PowerSource, RecordingEventSink, Replica, ReplicaState, ReplicationReconciler, StorageNode,
 };
 use kubeweft_model::DeviceId;
 
@@ -334,4 +340,177 @@ fn local_backends_survive_reopening() {
     assert_eq!(blobs.get(&content_id).unwrap(), b"persistent blob");
 
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn rewritten_content_becomes_a_garbage_candidate_and_is_not_replicated() {
+    let registry = Arc::new(ContentStoreRegistry::new());
+    add_node(
+        &registry,
+        node(
+            "laptop",
+            PowerSource::Battery,
+            Availability::Intermittent,
+            true,
+        ),
+    );
+    let fs = filesystem(Arc::clone(&registry));
+    fs.mkdir("/home").unwrap();
+    let initial = fs.create("/home/foo.txt").unwrap();
+    let first = fs
+        .write(
+            "/home/foo.txt",
+            b"content A",
+            Some(initial.generation),
+            &device("laptop"),
+        )
+        .unwrap();
+    let first_id = first.manifest.unwrap().content_id().unwrap().clone();
+    let second = fs
+        .write(
+            "/home/foo.txt",
+            b"content B",
+            Some(first.generation),
+            &device("laptop"),
+        )
+        .unwrap();
+    let second_id = second.manifest.unwrap().content_id().unwrap().clone();
+    add_node(
+        &registry,
+        node("desktop", PowerSource::Mains, Availability::Stable, true),
+    );
+
+    assert_eq!(fs.reconciler().reconcile().unwrap().replicas_created, 1);
+    let snapshot = fs.namespace().metadata_store().load().unwrap();
+    assert_eq!(
+        snapshot.retentions.get(&first_id),
+        Some(&ContentRetention::GarbageCandidate)
+    );
+    assert_eq!(snapshot.placements[&first_id].replicas.len(), 1);
+    assert_eq!(snapshot.placements[&second_id].replicas.len(), 2);
+}
+
+#[test]
+fn removed_content_is_not_replicated() {
+    let registry = Arc::new(ContentStoreRegistry::new());
+    add_node(
+        &registry,
+        node(
+            "laptop",
+            PowerSource::Battery,
+            Availability::Intermittent,
+            true,
+        ),
+    );
+    let fs = filesystem(Arc::clone(&registry));
+    fs.mkdir("/home").unwrap();
+    let initial = fs.create("/home/foo.txt").unwrap();
+    let written = fs
+        .write(
+            "/home/foo.txt",
+            b"removed content",
+            Some(initial.generation),
+            &device("laptop"),
+        )
+        .unwrap();
+    let content_id = written.manifest.unwrap().content_id().unwrap().clone();
+    fs.remove("/home/foo.txt").unwrap();
+    add_node(
+        &registry,
+        node("desktop", PowerSource::Mains, Availability::Stable, true),
+    );
+
+    assert_eq!(fs.reconciler().reconcile().unwrap().replicas_created, 0);
+    let snapshot = fs.namespace().metadata_store().load().unwrap();
+    assert_eq!(
+        snapshot.retentions.get(&content_id),
+        Some(&ContentRetention::GarbageCandidate)
+    );
+    assert_eq!(snapshot.placements[&content_id].replicas.len(), 1);
+}
+
+struct ConcurrentReplicaStore {
+    state: Mutex<MetadataSnapshot>,
+    inject_conflict: AtomicBool,
+    content_id: ContentId,
+}
+
+impl MetadataStore for ConcurrentReplicaStore {
+    fn load(&self) -> Result<MetadataSnapshot, FilesystemError> {
+        Ok(self.state.lock().unwrap().clone())
+    }
+
+    fn compare_and_swap(&self, mut replacement: MetadataSnapshot) -> Result<(), FilesystemError> {
+        let mut current = self.state.lock().unwrap();
+        if self.inject_conflict.swap(false, Ordering::SeqCst) {
+            current
+                .placements
+                .get_mut(&self.content_id)
+                .unwrap()
+                .replicas
+                .push(Replica {
+                    node_id: device("server"),
+                    state: ReplicaState::Offline,
+                });
+            current.revision += 1;
+            return Err(FilesystemError::Conflict);
+        }
+        if current.revision != replacement.revision {
+            return Err(FilesystemError::Conflict);
+        }
+        replacement.revision += 1;
+        *current = replacement;
+        Ok(())
+    }
+}
+
+#[test]
+fn reconciliation_merges_replica_states_into_the_current_placement() {
+    let bytes = b"concurrent placement";
+    let content_id = ContentId::for_bytes(bytes);
+    let snapshot = MetadataSnapshot {
+        placements: BTreeMap::from([(
+            content_id.clone(),
+            ContentPlacement {
+                content_id: content_id.clone(),
+                desired_replica_count: 2,
+                replicas: vec![Replica {
+                    node_id: device("desktop"),
+                    state: ReplicaState::Pending,
+                }],
+            },
+        )]),
+        retentions: BTreeMap::from([(content_id.clone(), ContentRetention::Snapshot)]),
+        ..MetadataSnapshot::default()
+    };
+    let metadata = Arc::new(ConcurrentReplicaStore {
+        state: Mutex::new(snapshot),
+        inject_conflict: AtomicBool::new(true),
+        content_id: content_id.clone(),
+    });
+    let registry = Arc::new(ContentStoreRegistry::new());
+    add_node(
+        &registry,
+        node("desktop", PowerSource::Mains, Availability::Stable, true),
+    );
+    add_node(
+        &registry,
+        node("server", PowerSource::Mains, Availability::Stable, false),
+    );
+    registry.put_on(&device("desktop"), bytes).unwrap();
+    let reconciler = ReplicationReconciler::new(
+        metadata.clone(),
+        registry,
+        Arc::new(DefaultPlacementPolicy),
+        Arc::new(RecordingEventSink::default()),
+    );
+
+    reconciler.reconcile().unwrap();
+    let placement = &metadata.load().unwrap().placements[&content_id];
+    assert!(placement.replicas.iter().any(|replica| {
+        replica.node_id == device("desktop") && replica.state == ReplicaState::Healthy
+    }));
+    assert!(placement.replicas.iter().any(|replica| {
+        replica.node_id == device("server") && replica.state == ReplicaState::Offline
+    }));
 }

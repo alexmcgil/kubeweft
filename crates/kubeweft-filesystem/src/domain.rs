@@ -235,6 +235,20 @@ pub enum DurabilityStatus {
     Degraded,
 }
 
+/// Whether immutable content should still receive durability maintenance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ContentRetention {
+    LiveReference,
+    Snapshot,
+    GarbageCandidate,
+}
+
+impl ContentRetention {
+    pub fn is_retained(self) -> bool {
+        matches!(self, Self::LiveReference | Self::Snapshot)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContentPlacement {
     pub content_id: ContentId,

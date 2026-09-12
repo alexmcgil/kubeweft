@@ -8,14 +8,16 @@ mod client;
 mod discovery;
 mod domain;
 mod error;
+mod local_ipc;
 mod store;
 mod wire;
 
 pub use agent::{AgentConfig, AgentHandle};
-pub use client::ControlClient;
+pub use client::LocalControlClient;
 pub use discovery::{DEFAULT_DISCOVERY_PORT, DiscoveryAnnouncement, discover};
 pub use domain::{
-    AgentState, ClusterId, ClusterMember, ClusterRole, ClusterSummary, MembershipStatus,
+    AgentState, ClusterId, ClusterMember, ClusterRole, ClusterSummary, JoinRequestId,
+    MembershipStatus,
 };
 pub use error::TransportError;
 pub use store::ClusterStore;

@@ -1,38 +1,29 @@
-use std::{net::SocketAddr, path::Path};
+use std::path::{Path, PathBuf};
 
 use crate::{
-    ClusterMember, ClusterStore, ClusterSummary, MembershipStatus, TransportError,
-    wire::{ControlRequest, ControlResponse, send_request},
+    ClusterMember, ClusterSummary, MembershipStatus, TransportError,
+    local_ipc::{connect, socket_path},
+    wire::{
+        ControlResponse, LocalRequest, PROTOCOL_VERSION, RequestEnvelope, ResponseEnvelope,
+        read_frame, write_frame,
+    },
 };
 
-#[derive(Debug, Clone, Copy)]
-pub struct ControlClient {
-    endpoint: SocketAddr,
+/// Client for the user-scoped local agent control channel.
+#[derive(Debug, Clone)]
+pub struct LocalControlClient {
+    socket_path: PathBuf,
 }
 
-impl ControlClient {
-    pub fn new(endpoint: SocketAddr) -> Self {
-        Self { endpoint }
-    }
-
+impl LocalControlClient {
     pub fn local(data_directory: impl AsRef<Path>) -> Result<Self, TransportError> {
-        let store = ClusterStore::open(data_directory, None)?;
-        Ok(Self::new(store.read_runtime_endpoint()?))
-    }
-
-    pub fn endpoint(&self) -> SocketAddr {
-        self.endpoint
-    }
-
-    pub fn ping(&self) -> Result<MembershipStatus, TransportError> {
-        match send_request(self.endpoint, ControlRequest::Ping)? {
-            ControlResponse::Pong { status } => Ok(status),
-            response => unexpected(response),
-        }
+        Ok(Self {
+            socket_path: socket_path(data_directory.as_ref()),
+        })
     }
 
     pub fn status(&self) -> Result<MembershipStatus, TransportError> {
-        match send_request(self.endpoint, ControlRequest::LocalStatus)? {
+        match self.request(LocalRequest::LocalStatus)? {
             ControlResponse::Status { status } => Ok(status),
             response => unexpected(response),
         }
@@ -42,10 +33,7 @@ impl ControlClient {
         &self,
         name: impl Into<String>,
     ) -> Result<(ClusterSummary, String), TransportError> {
-        match send_request(
-            self.endpoint,
-            ControlRequest::CreateCluster { name: name.into() },
-        )? {
+        match self.request(LocalRequest::CreateCluster { name: name.into() })? {
             ControlResponse::ClusterCreated {
                 cluster,
                 invite_token,
@@ -55,7 +43,7 @@ impl ControlClient {
     }
 
     pub fn create_invite(&self) -> Result<String, TransportError> {
-        match send_request(self.endpoint, ControlRequest::CreateInvite)? {
+        match self.request(LocalRequest::CreateInvite)? {
             ControlResponse::InviteCreated { invite_token } => Ok(invite_token),
             response => unexpected(response),
         }
@@ -63,25 +51,46 @@ impl ControlClient {
 
     pub fn join_cluster(
         &self,
-        coordinator: SocketAddr,
+        coordinator: std::net::SocketAddr,
         invite_token: impl Into<String>,
     ) -> Result<ClusterSummary, TransportError> {
-        match send_request(
-            self.endpoint,
-            ControlRequest::JoinCluster {
-                coordinator,
-                invite_token: invite_token.into(),
-            },
-        )? {
+        match self.request(LocalRequest::JoinCluster {
+            coordinator,
+            invite_token: invite_token.into(),
+        })? {
             ControlResponse::Joined { cluster } => Ok(cluster),
             response => unexpected(response),
         }
     }
 
     pub fn members(&self) -> Result<(ClusterSummary, Vec<ClusterMember>), TransportError> {
-        match send_request(self.endpoint, ControlRequest::LocalMembers)? {
+        match self.request(LocalRequest::LocalMembers)? {
             ControlResponse::Members { cluster, members } => Ok((cluster, members)),
             response => unexpected(response),
+        }
+    }
+
+    fn request(&self, request: LocalRequest) -> Result<ControlResponse, TransportError> {
+        let mut stream = connect(&self.socket_path)?;
+        write_frame(
+            &mut stream,
+            &RequestEnvelope {
+                version: PROTOCOL_VERSION,
+                request,
+            },
+        )?;
+        let response: ResponseEnvelope = read_frame(&mut stream)?;
+        if response.version != PROTOCOL_VERSION {
+            return Err(TransportError::InvalidMessage(format!(
+                "unsupported response protocol version {}",
+                response.version
+            )));
+        }
+        match response.response {
+            ControlResponse::Error { code, message } => {
+                Err(TransportError::Remote { code, message })
+            }
+            response => Ok(response),
         }
     }
 }

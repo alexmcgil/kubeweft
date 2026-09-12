@@ -9,7 +9,7 @@ use std::{
 
 use kubeweft_filesystem::{EntryMetadata, FileType, FilesystemError};
 use kubeweft_local::LocalFilesystem;
-use kubeweft_transport::{ClusterRole, ControlClient, TransportError, discover};
+use kubeweft_transport::{ClusterRole, LocalControlClient, TransportError, discover};
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1).collect()) {
@@ -134,7 +134,7 @@ fn run_cluster(mut arguments: Vec<OsString>, data_directory: PathBuf) -> Result<
         return Ok(());
     }
 
-    let client = ControlClient::local(data_directory)?;
+    let client = LocalControlClient::local(data_directory)?;
     match command.as_str() {
         "status" => {
             ensure_empty(&arguments)?;

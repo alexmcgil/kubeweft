@@ -17,10 +17,10 @@ mod service;
 
 pub use content::{ContentStore, ContentStoreRegistry, InMemoryContentStore, LocalContentStore};
 pub use domain::{
-    Availability, ChunkReference, ContentId, ContentManifest, ContentPlacement, DirectoryId,
-    DirectoryMetadata, DurabilityStatus, FileId, FileMetadata, FileType, FileVersion, LeaseId,
-    NamespaceEntry, NamespaceTarget, NetworkKind, PowerSource, Replica, ReplicaState, StorageNode,
-    WriteLease,
+    Availability, ChunkReference, ContentId, ContentManifest, ContentPlacement, ContentRetention,
+    DirectoryId, DirectoryMetadata, DurabilityStatus, FileId, FileMetadata, FileType, FileVersion,
+    LeaseId, NamespaceEntry, NamespaceTarget, NetworkKind, PowerSource, Replica, ReplicaState,
+    StorageNode, WriteLease,
 };
 pub use error::FilesystemError;
 pub use event::{EventSink, FilesystemEvent, RecordingEventSink};

@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -10,8 +10,8 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ContentId, ContentPlacement, DirectoryId, DirectoryMetadata, FileId, FileMetadata,
-    FilesystemError, NamespaceEntry,
+    ContentId, ContentPlacement, ContentRetention, DirectoryId, DirectoryMetadata, FileId,
+    FileMetadata, FilesystemError, NamespaceEntry,
 };
 
 /// Complete authoritative metadata state for the MVP.
@@ -26,6 +26,43 @@ pub struct MetadataSnapshot {
     pub files: BTreeMap<FileId, FileMetadata>,
     pub entries: Vec<NamespaceEntry>,
     pub placements: BTreeMap<ContentId, ContentPlacement>,
+    #[serde(default)]
+    pub retentions: BTreeMap<ContentId, ContentRetention>,
+}
+
+impl MetadataSnapshot {
+    pub fn retained_content_ids(&self) -> BTreeSet<ContentId> {
+        let mut retained = self
+            .retentions
+            .iter()
+            .filter(|(_, retention)| retention.is_retained())
+            .map(|(content_id, _)| content_id.clone())
+            .collect::<BTreeSet<_>>();
+        for file in self.files.values() {
+            if let Some(manifest) = &file.manifest {
+                retained.extend(manifest.chunks.iter().map(|chunk| chunk.content_id.clone()));
+            }
+        }
+        retained
+    }
+
+    pub fn is_content_retained(&self, content_id: &ContentId) -> bool {
+        self.retentions
+            .get(content_id)
+            .is_some_and(|retention| retention.is_retained())
+            || self.is_content_live_referenced(content_id)
+    }
+
+    pub fn is_content_live_referenced(&self, content_id: &ContentId) -> bool {
+        self.files.values().any(|file| {
+            file.manifest.as_ref().is_some_and(|manifest| {
+                manifest
+                    .chunks
+                    .iter()
+                    .any(|chunk| chunk.content_id == *content_id)
+            })
+        })
+    }
 }
 
 impl Default for MetadataSnapshot {
@@ -44,6 +81,7 @@ impl Default for MetadataSnapshot {
             files: BTreeMap::new(),
             entries: Vec::new(),
             placements: BTreeMap::new(),
+            retentions: BTreeMap::new(),
         }
     }
 }
