@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package kubeweft.v1;
+
+import "kubeweft/v1/common.proto";
+
+// Field numbers are part of the wire contract. Removed field numbers must be
+// reserved and never reused.
+message Cluster {
+  ClusterId id = 1;
+  string name = 2;
+  string coordinator_endpoint = 3;
+}
+
+enum ClusterRole {
+  CLUSTER_ROLE_UNSPECIFIED = 0;
+  CLUSTER_ROLE_COORDINATOR = 1;
+  CLUSTER_ROLE_MEMBER = 2;
+}
+
+message ClusterMember {
+  DeviceId device_id = 1;
+  string device_name = 2;
+  string endpoint = 3;
+  uint64 joined_at_millis = 4;
+}

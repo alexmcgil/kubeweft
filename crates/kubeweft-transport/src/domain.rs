@@ -1,0 +1,148 @@
+use std::{
+    fmt,
+    net::SocketAddr,
+    str::FromStr,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use kubeweft_model::DeviceId;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ClusterId(Uuid);
+
+impl ClusterId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
+impl Default for ClusterId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Display for ClusterId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl FromStr for ClusterId {
+    type Err = uuid::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Uuid::parse_str(value).map(Self)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClusterRole {
+    Coordinator,
+    Member,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClusterMember {
+    pub device_id: DeviceId,
+    pub device_name: String,
+    pub endpoint: SocketAddr,
+    pub joined_at_millis: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClusterSummary {
+    pub id: ClusterId,
+    pub name: String,
+    pub coordinator: SocketAddr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MembershipStatus {
+    pub device_id: DeviceId,
+    pub device_name: String,
+    pub cluster: Option<ClusterSummary>,
+    pub role: Option<ClusterRole>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentState {
+    pub(crate) revision: u64,
+    pub(crate) device_id: DeviceId,
+    pub(crate) device_name: String,
+    pub(crate) cluster: Option<StoredCluster>,
+}
+
+impl AgentState {
+    pub fn device_id(&self) -> &DeviceId {
+        &self.device_id
+    }
+
+    pub fn device_name(&self) -> &str {
+        &self.device_name
+    }
+
+    pub fn status(&self) -> MembershipStatus {
+        MembershipStatus {
+            device_id: self.device_id.clone(),
+            device_name: self.device_name.clone(),
+            cluster: self.cluster.as_ref().map(StoredCluster::summary),
+            role: self.cluster.as_ref().map(|cluster| cluster.role),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct StoredCluster {
+    pub id: ClusterId,
+    pub name: String,
+    pub coordinator: SocketAddr,
+    pub role: ClusterRole,
+    pub credential: String,
+    pub invite_token: Option<String>,
+    pub members: Vec<StoredMember>,
+}
+
+impl StoredCluster {
+    pub fn summary(&self) -> ClusterSummary {
+        ClusterSummary {
+            id: self.id,
+            name: self.name.clone(),
+            coordinator: self.coordinator,
+        }
+    }
+
+    pub fn public_members(&self) -> Vec<ClusterMember> {
+        self.members
+            .iter()
+            .map(|member| member.member.clone())
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct StoredMember {
+    pub member: ClusterMember,
+    pub credential: String,
+}
+
+pub(crate) fn new_secret() -> String {
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
+}
+
+pub(crate) fn new_device_id() -> DeviceId {
+    DeviceId::new(format!("device.{}", Uuid::new_v4().simple()))
+        .expect("UUID device identifier is valid")
+}
+
+pub(crate) fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}

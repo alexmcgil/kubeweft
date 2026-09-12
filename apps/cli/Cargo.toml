@@ -12,3 +12,4 @@ path = "src/main.rs"
 [dependencies]
 kubeweft-filesystem = { path = "../../crates/kubeweft-filesystem" }
 kubeweft-local = { path = "../../crates/kubeweft-local" }
+kubeweft-transport = { path = "../../crates/kubeweft-transport" }

@@ -4,6 +4,8 @@ package kubeweft.v1;
 
 import "kubeweft/v1/device.proto";
 import "kubeweft/v1/job.proto";
+import "kubeweft/v1/cluster.proto";
+import "kubeweft/v1/common.proto";
 
 // Field numbers are part of the wire contract. Removed field numbers must be
 // reserved and never reused.
@@ -23,4 +25,31 @@ message SubmitJobRequest {
 
 message SubmitJobResponse {
   Job job = 1;
+}
+
+message CreateClusterRequest {
+  string name = 1;
+}
+
+message CreateClusterResponse {
+  Cluster cluster = 1;
+  string invite_token = 2;
+}
+
+message JoinClusterRequest {
+  string coordinator_endpoint = 1;
+  string invite_token = 2;
+}
+
+message JoinClusterResponse {
+  Cluster cluster = 1;
+}
+
+message ListClusterMembersRequest {
+  ClusterId cluster_id = 1;
+}
+
+message ListClusterMembersResponse {
+  Cluster cluster = 1;
+  repeated ClusterMember members = 2;
 }
