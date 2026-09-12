@@ -6,4 +6,4 @@ Status: accepted for the bootstrap transport; migration required before Android 
 
 Before an Android client connects, generate Rust and Kotlin protobuf types, keep explicit conversions to domain types, and replace JSON payloads inside the existing frames. Do not move domain semantics into generated types.
 
-The current LAN channel is plaintext. Its invite and membership bearer credentials provide validation only, without confidentiality, integrity against an active network attacker, or cryptographic device identity. The next security design must combine cryptographic device identity, authenticated encrypted channels, and invite/pairing bootstrap using standard reviewed protocols and libraries. Discovery remains an untrusted endpoint hint.
+Peer framing now runs inside the standard Noise channel described in [ADR 0002](0002-device-identity-and-secure-channel.md). JSON remains a private application-message encoding and still must migrate to generated protobuf payloads before Android networking. Discovery remains an untrusted endpoint hint.

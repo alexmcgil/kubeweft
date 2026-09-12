@@ -42,6 +42,12 @@ fn stored_own_credential(directory: &Path) -> String {
     state["cluster"]["credential"].as_str().unwrap().to_owned()
 }
 
+fn stored_device_id(directory: &Path) -> String {
+    let state: serde_json::Value =
+        serde_json::from_slice(&fs::read(directory.join("cluster.json")).unwrap()).unwrap();
+    state["device_id"].as_str().unwrap().to_owned()
+}
+
 fn start_agent(directory: &PathBuf, name: &str) -> AgentHandle {
     let mut config = AgentConfig::new(directory);
     config.listen = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
@@ -267,7 +273,7 @@ fn loopback_tcp_cannot_invoke_local_privileged_control() {
         );
     }
     let payload = serde_json::to_vec(&serde_json::json!({
-        "version": 2,
+        "version": 3,
         "request": {"type": "create_cluster", "name": "must-not-exist"}
     }))
     .unwrap();
@@ -276,12 +282,11 @@ fn loopback_tcp_cannot_invoke_local_privileged_control() {
         .write_all(&u32::try_from(payload.len()).unwrap().to_be_bytes())
         .unwrap();
     stream.write_all(&payload).unwrap();
-    let mut length = [0; 4];
-    stream.read_exact(&mut length).unwrap();
-    let mut response = vec![0; u32::from_be_bytes(length) as usize];
-    stream.read_exact(&mut response).unwrap();
-    let response: serde_json::Value = serde_json::from_slice(&response).unwrap();
-    assert_eq!(response["response"]["type"], "error");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    let mut response = [0_u8; 4];
+    assert!(stream.read_exact(&mut response).is_err());
     assert!(
         LocalControlClient::local(&directory)
             .unwrap()
@@ -296,22 +301,202 @@ fn loopback_tcp_cannot_invoke_local_privileged_control() {
 }
 
 #[test]
-fn non_loopback_plaintext_listener_requires_explicit_opt_in() {
-    let directory = temporary_directory("plaintext-opt-in");
+fn non_loopback_listener_uses_the_secure_peer_transport_without_an_insecure_flag() {
+    let directory = temporary_directory("secure-non-loopback");
     let mut config = AgentConfig::new(&directory);
     config.listen = (Ipv4Addr::UNSPECIFIED, 0).into();
     config.discovery_port = None;
-    assert!(matches!(
-        AgentHandle::start(config),
-        Err(TransportError::InsecurePlaintextLanOptInRequired)
-    ));
-    let mut explicitly_allowed = AgentConfig::new(&directory);
-    explicitly_allowed.listen = (Ipv4Addr::UNSPECIFIED, 0).into();
-    explicitly_allowed.discovery_port = None;
-    explicitly_allowed.insecure_plaintext_lan = true;
-    AgentHandle::start(explicitly_allowed)
-        .unwrap()
-        .shutdown()
-        .unwrap();
+    AgentHandle::start(config).unwrap().shutdown().unwrap();
     fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn device_identity_is_private_and_survives_restart() {
+    let directory = temporary_directory("identity-persistence");
+    let first = start_agent(&directory, "desktop");
+    let first_id = LocalControlClient::local(&directory)
+        .unwrap()
+        .status()
+        .unwrap()
+        .device_id;
+    assert_eq!(first_id.as_str(), stored_device_id(&directory));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        assert_eq!(
+            fs::metadata(directory.join("identity.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+    first.shutdown().unwrap();
+
+    let second = start_agent(&directory, "ignored");
+    assert_eq!(
+        LocalControlClient::local(&directory)
+            .unwrap()
+            .status()
+            .unwrap()
+            .device_id,
+        first_id
+    );
+    second.shutdown().unwrap();
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn pairing_code_pins_the_coordinator_identity() {
+    let expected_directory = temporary_directory("pin-expected");
+    let impostor_directory = temporary_directory("pin-impostor");
+    let joining_directory = temporary_directory("pin-joining");
+    let expected = start_agent(&expected_directory, "expected");
+    let impostor = start_agent(&impostor_directory, "impostor");
+    let joining = start_agent(&joining_directory, "joining");
+    let expected_client = LocalControlClient::local(&expected_directory).unwrap();
+    let impostor_client = LocalControlClient::local(&impostor_directory).unwrap();
+    expected_client.create_cluster("expected-cluster").unwrap();
+    impostor_client.create_cluster("impostor-cluster").unwrap();
+    let pairing_code = expected_client.create_invite().unwrap();
+
+    let mismatch = LocalControlClient::local(&joining_directory)
+        .unwrap()
+        .join_cluster(impostor.advertised_endpoint(), &pairing_code);
+    assert!(
+        matches!(&mismatch, Err(TransportError::Remote { code, .. }) if code == "peer_identity_mismatch"),
+        "unexpected identity mismatch result: {mismatch:?}"
+    );
+
+    LocalControlClient::local(&joining_directory)
+        .unwrap()
+        .join_cluster(expected.advertised_endpoint(), pairing_code)
+        .unwrap();
+
+    expected.shutdown().unwrap();
+    impostor.shutdown().unwrap();
+    joining.shutdown().unwrap();
+    fs::remove_dir_all(expected_directory).unwrap();
+    fs::remove_dir_all(impostor_directory).unwrap();
+    fs::remove_dir_all(joining_directory).unwrap();
+}
+
+#[test]
+fn a_membership_credential_cannot_be_replayed_by_another_device_identity() {
+    let coordinator_directory = temporary_directory("replay-coordinator");
+    let member_directory = temporary_directory("replay-member");
+    let attacker_directory = temporary_directory("replay-attacker");
+    let coordinator = start_agent(&coordinator_directory, "coordinator");
+    let member = start_agent(&member_directory, "member");
+    let attacker = start_agent(&attacker_directory, "attacker");
+    let coordinator_client = LocalControlClient::local(&coordinator_directory).unwrap();
+    let (_, pairing_code) = coordinator_client.create_cluster("home").unwrap();
+    LocalControlClient::local(&member_directory)
+        .unwrap()
+        .join_cluster(coordinator.advertised_endpoint(), pairing_code)
+        .unwrap();
+    attacker.shutdown().unwrap();
+
+    let member_state: serde_json::Value =
+        serde_json::from_slice(&fs::read(member_directory.join("cluster.json")).unwrap()).unwrap();
+    let mut attacker_state: serde_json::Value =
+        serde_json::from_slice(&fs::read(attacker_directory.join("cluster.json")).unwrap())
+            .unwrap();
+    attacker_state["cluster"] = member_state["cluster"].clone();
+    fs::write(
+        attacker_directory.join("cluster.json"),
+        serde_json::to_vec_pretty(&attacker_state).unwrap(),
+    )
+    .unwrap();
+
+    let attacker = start_agent(&attacker_directory, "ignored");
+    let replay = LocalControlClient::local(&attacker_directory)
+        .unwrap()
+        .members();
+    assert!(
+        matches!(&replay, Err(TransportError::Remote { code, .. }) if code == "unauthorized"),
+        "unexpected credential replay result: {replay:?}"
+    );
+
+    coordinator.shutdown().unwrap();
+    member.shutdown().unwrap();
+    attacker.shutdown().unwrap();
+    fs::remove_dir_all(coordinator_directory).unwrap();
+    fs::remove_dir_all(member_directory).unwrap();
+    fs::remove_dir_all(attacker_directory).unwrap();
+}
+
+#[test]
+fn pairing_and_membership_secrets_are_encrypted_on_the_peer_connection() {
+    let coordinator_directory = temporary_directory("encrypted-coordinator");
+    let joining_directory = temporary_directory("encrypted-joining");
+    let coordinator = start_agent(&coordinator_directory, "coordinator");
+    let joining = start_agent(&joining_directory, "joining");
+    let coordinator_client = LocalControlClient::local(&coordinator_directory).unwrap();
+    let (_, pairing_code) = coordinator_client.create_cluster("home").unwrap();
+
+    let proxy = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let proxy_endpoint = proxy.local_addr().unwrap();
+    let coordinator_endpoint = coordinator.advertised_endpoint();
+    let recorded = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let proxy_recording = std::sync::Arc::clone(&recorded);
+    let proxy_thread = std::thread::spawn(move || {
+        let (client, _) = proxy.accept().unwrap();
+        let server = std::net::TcpStream::connect(coordinator_endpoint).unwrap();
+        let mut client_reader = client.try_clone().unwrap();
+        let mut server_writer = server.try_clone().unwrap();
+        let server_recording = std::sync::Arc::clone(&proxy_recording);
+        let client_to_server = std::thread::spawn(move || {
+            let mut buffer = [0_u8; 4096];
+            loop {
+                let count = client_reader.read(&mut buffer).unwrap();
+                if count == 0 {
+                    break;
+                }
+                proxy_recording
+                    .lock()
+                    .unwrap()
+                    .extend_from_slice(&buffer[..count]);
+                server_writer.write_all(&buffer[..count]).unwrap();
+            }
+        });
+        let mut server_reader = server;
+        let mut client_writer = client;
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let count = server_reader.read(&mut buffer).unwrap();
+            if count == 0 {
+                break;
+            }
+            server_recording
+                .lock()
+                .unwrap()
+                .extend_from_slice(&buffer[..count]);
+            client_writer.write_all(&buffer[..count]).unwrap();
+        }
+        client_to_server.join().unwrap();
+    });
+
+    LocalControlClient::local(&joining_directory)
+        .unwrap()
+        .join_cluster(proxy_endpoint, &pairing_code)
+        .unwrap();
+    proxy_thread.join().unwrap();
+    let credential = stored_member_credential(&coordinator_directory, "joining");
+    let bytes = recorded.lock().unwrap();
+    assert!(!contains_subslice(&bytes, pairing_code.as_bytes()));
+    assert!(!contains_subslice(&bytes, credential.as_bytes()));
+
+    coordinator.shutdown().unwrap();
+    joining.shutdown().unwrap();
+    fs::remove_dir_all(coordinator_directory).unwrap();
+    fs::remove_dir_all(joining_directory).unwrap();
+}
+
+fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|candidate| candidate == needle)
 }

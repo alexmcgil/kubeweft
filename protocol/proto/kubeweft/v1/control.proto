@@ -70,6 +70,8 @@ message ListClusterMembersResponse {
 
 message ListRemoteClusterMembersRequest {
   ClusterId cluster_id = 1;
+  // Must match the static identity proven by the peer channel.
   DeviceId device_id = 2;
+  // Separately revocable authorization; it is not the device identity.
   string membership_credential = 3;
 }

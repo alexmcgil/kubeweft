@@ -16,7 +16,7 @@ use crate::{ClusterStore, ClusterSummary, TransportError, wire::PROTOCOL_VERSION
 
 pub const DEFAULT_DISCOVERY_PORT: u16 = 37_845;
 const MULTICAST_ADDRESS: Ipv4Addr = Ipv4Addr::new(239, 255, 87, 77);
-const DISCOVERY_MAGIC: &str = "kubeweft-discovery-v2";
+const DISCOVERY_MAGIC: &str = "kubeweft-discovery-v3";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// Untrusted reachability hint; callers must not infer identity or membership.

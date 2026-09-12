@@ -49,7 +49,6 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
                 config.device_name = Some(value?.to_owned());
                 index += 1;
             }
-            "--insecure-plaintext-lan" => config.insecure_plaintext_lan = true,
             "--no-discovery" => config.discovery_port = None,
             _ => return Err(format!("unknown option: {option}")),
         }
@@ -89,8 +88,5 @@ fn print_help() {
     println!("  --discovery-port PORT   LAN discovery port (default 37845)");
     println!("  --no-discovery          disable LAN discovery");
     println!("  --name NAME             device display name on first start");
-    println!("  --insecure-plaintext-lan allow non-loopback plaintext peer traffic");
-    println!(
-        "                         (development only; no network confidentiality/authenticity)"
-    );
+    println!("  peer TCP uses an authenticated encrypted Noise channel");
 }

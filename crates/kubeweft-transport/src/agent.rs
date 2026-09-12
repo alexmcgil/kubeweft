@@ -13,8 +13,13 @@ use std::{
 use crate::{
     ClusterId, ClusterMember, ClusterRole, ClusterStore, TransportError,
     discovery::{DEFAULT_DISCOVERY_PORT, discovery_sender_socket, run_discovery},
-    domain::{AcceptedJoin, PendingJoin, StoredCluster, StoredMember, new_secret, now_millis},
+    domain::{
+        AcceptedJoin, PairingInvitation, PendingJoin, StoredCluster, StoredMember, new_secret,
+        now_millis,
+    },
+    identity::LocalDeviceIdentity,
     local_ipc::{LocalListener, LocalStream, bind as bind_local, socket_path},
+    secure::SecurePeerStream,
     store::AgentDirectoryLock,
     wire::{
         ControlResponse, LocalRequest, PROTOCOL_VERSION, RemoteRequest, RequestEnvelope,
@@ -29,8 +34,6 @@ pub struct AgentConfig {
     pub advertise: Option<SocketAddr>,
     pub discovery_port: Option<u16>,
     pub device_name: Option<String>,
-    /// Required acknowledgement while the peer transport is plaintext.
-    pub insecure_plaintext_lan: bool,
     /// Development fault injection used to prove idempotent join retries.
     #[doc(hidden)]
     pub drop_remote_join_responses: usize,
@@ -47,7 +50,6 @@ impl AgentConfig {
             advertise: None,
             discovery_port: Some(DEFAULT_DISCOVERY_PORT),
             device_name: None,
-            insecure_plaintext_lan: false,
             drop_remote_join_responses: 0,
             fail_join_after_remote_accepts: 0,
         }
@@ -66,8 +68,8 @@ pub struct AgentHandle {
 impl AgentHandle {
     pub fn start(config: AgentConfig) -> Result<Self, TransportError> {
         let directory_lock = ClusterStore::acquire_agent_lock(&config.data_directory)?;
-        require_plaintext_opt_in(&config)?;
         let store = ClusterStore::open(&config.data_directory, config.device_name.as_deref())?;
+        let identity = Arc::new(LocalDeviceIdentity::load_or_create(&config.data_directory)?);
 
         let local_socket_path = socket_path(&config.data_directory);
         let local_listener = bind_local(&local_socket_path)?;
@@ -85,11 +87,13 @@ impl AgentHandle {
             Arc::new(AtomicUsize::new(config.fail_join_after_remote_accepts));
 
         let local_store = store.clone();
+        let local_identity = Arc::clone(&identity);
         let local_shutdown = Arc::clone(&shutdown);
         let local_thread = thread::spawn(move || {
             run_local_listener(
                 local_listener,
                 local_store,
+                local_identity,
                 advertised_endpoint,
                 local_shutdown,
                 failed_local_join_commits,
@@ -97,11 +101,13 @@ impl AgentHandle {
         });
 
         let remote_store = store.clone();
+        let remote_identity = identity;
         let remote_shutdown = Arc::clone(&shutdown);
         let remote_thread = thread::spawn(move || {
             run_remote_listener(
                 remote_listener,
                 remote_store,
+                remote_identity,
                 remote_shutdown,
                 dropped_join_responses,
             )
@@ -166,6 +172,7 @@ impl Drop for AgentHandle {
 fn run_local_listener(
     listener: LocalListener,
     store: ClusterStore,
+    identity: Arc<LocalDeviceIdentity>,
     advertised_endpoint: SocketAddr,
     shutdown: Arc<AtomicBool>,
     failed_local_join_commits: Arc<AtomicUsize>,
@@ -176,6 +183,7 @@ fn run_local_listener(
                 let _ = handle_local_connection(
                     stream,
                     &store,
+                    &identity,
                     advertised_endpoint,
                     &failed_local_join_commits,
                 );
@@ -192,6 +200,7 @@ fn run_local_listener(
 fn handle_local_connection(
     mut stream: LocalStream,
     store: &ClusterStore,
+    identity: &LocalDeviceIdentity,
     advertised_endpoint: SocketAddr,
     failed_local_join_commits: &AtomicUsize,
 ) -> Result<(), TransportError> {
@@ -199,6 +208,7 @@ fn handle_local_connection(
         Ok(envelope) if envelope.version == PROTOCOL_VERSION => dispatch_local(
             envelope.request,
             store,
+            identity,
             advertised_endpoint,
             failed_local_join_commits,
         )
@@ -212,13 +222,15 @@ fn handle_local_connection(
 fn run_remote_listener(
     listener: TcpListener,
     store: ClusterStore,
+    identity: Arc<LocalDeviceIdentity>,
     shutdown: Arc<AtomicBool>,
     dropped_join_responses: Arc<AtomicUsize>,
 ) -> Result<(), TransportError> {
     while !shutdown.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, _)) => {
-                let _ = handle_remote_connection(stream, &store, &dropped_join_responses);
+                let _ =
+                    handle_remote_connection(stream, &store, &identity, &dropped_join_responses);
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(20));
@@ -230,19 +242,31 @@ fn run_remote_listener(
 }
 
 fn handle_remote_connection(
-    mut stream: TcpStream,
+    stream: TcpStream,
     store: &ClusterStore,
+    identity: &LocalDeviceIdentity,
     dropped_join_responses: &AtomicUsize,
 ) -> Result<(), TransportError> {
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-    let envelope = match read_frame::<RequestEnvelope<RemoteRequest>>(&mut stream) {
+    let mut stream = SecurePeerStream::accept(stream, identity)?;
+    let peer_device_id = stream.remote_device_id().clone();
+    let envelope = match stream.read::<RequestEnvelope<RemoteRequest>>() {
         Ok(envelope) if envelope.version == PROTOCOL_VERSION => envelope,
-        Ok(envelope) => return write_response(&mut stream, unsupported_version(envelope.version)),
-        Err(error) => return write_response(&mut stream, error_response(error)),
+        Ok(envelope) => {
+            return stream.write(&ResponseEnvelope {
+                version: PROTOCOL_VERSION,
+                response: unsupported_version(envelope.version),
+            });
+        }
+        Err(error) => {
+            return stream.write(&ResponseEnvelope {
+                version: PROTOCOL_VERSION,
+                response: error_response(error),
+            });
+        }
     };
     let is_join = matches!(envelope.request, RemoteRequest::RemoteJoin { .. });
-    let response = dispatch_remote(envelope.request, store).unwrap_or_else(error_response);
+    let response =
+        dispatch_remote(envelope.request, store, &peer_device_id).unwrap_or_else(error_response);
     if is_join
         && matches!(response, ControlResponse::JoinAccepted { .. })
         && dropped_join_responses
@@ -253,7 +277,10 @@ fn handle_remote_connection(
     {
         return Ok(());
     }
-    write_response(&mut stream, response)
+    stream.write(&ResponseEnvelope {
+        version: PROTOCOL_VERSION,
+        response,
+    })
 }
 
 fn write_response(
@@ -272,6 +299,7 @@ fn write_response(
 fn dispatch_local(
     request: LocalRequest,
     store: &ClusterStore,
+    identity: &LocalDeviceIdentity,
     advertised_endpoint: SocketAddr,
     failed_local_join_commits: &AtomicUsize,
 ) -> Result<ControlResponse, TransportError> {
@@ -286,33 +314,32 @@ fn dispatch_local(
             invite_token,
         } => join_cluster(
             store,
+            identity,
             advertised_endpoint,
             coordinator,
             invite_token,
             failed_local_join_commits,
         ),
-        LocalRequest::LocalMembers => local_members(store),
+        LocalRequest::LocalMembers => local_members(store, identity),
     }
 }
 
 fn dispatch_remote(
     request: RemoteRequest,
     store: &ClusterStore,
+    peer_device_id: &kubeweft_model::DeviceId,
 ) -> Result<ControlResponse, TransportError> {
     match request {
-        RemoteRequest::Ping => Ok(ControlResponse::Pong {
-            status: store.load()?.status(),
-        }),
         RemoteRequest::RemoteJoin {
             invite_token,
             member,
             join_request_id,
-        } => accept_member(store, invite_token, member, join_request_id),
+        } => accept_member(store, invite_token, member, join_request_id, peer_device_id),
         RemoteRequest::RemoteMembers {
             cluster_id,
             device_id,
             credential,
-        } => remote_members(store, cluster_id, &device_id, &credential),
+        } => remote_members(store, cluster_id, &device_id, &credential, peer_device_id),
     }
 }
 
@@ -322,7 +349,6 @@ fn create_cluster(
     name: String,
 ) -> Result<ControlResponse, TransportError> {
     let name = validate_cluster_name(name)?;
-    let invite_token = new_secret();
     let own_credential = new_secret();
     let (cluster, invite_token) = store.update(|state| {
         if state.cluster.is_some() {
@@ -331,10 +357,13 @@ fn create_cluster(
         if state.pending_join.is_some() {
             return Err(TransportError::Conflict);
         }
+        let cluster_id = ClusterId::new();
+        let invite_token = PairingInvitation::new(cluster_id, state.device_id.clone()).encode()?;
         let cluster = StoredCluster {
-            id: ClusterId::new(),
+            id: cluster_id,
             name: name.clone(),
             coordinator: endpoint,
+            coordinator_device_id: state.device_id.clone(),
             role: ClusterRole::Coordinator,
             credential: own_credential.clone(),
             invite_token: Some(invite_token.clone()),
@@ -360,28 +389,34 @@ fn create_cluster(
 }
 
 fn create_invite(store: &ClusterStore) -> Result<ControlResponse, TransportError> {
-    let token = new_secret();
     let invite_token = store.update(|state| {
         let cluster = state.cluster.as_mut().ok_or(TransportError::NotInCluster)?;
         if cluster.role != ClusterRole::Coordinator {
             return Err(TransportError::NotCoordinator);
         }
+        let token =
+            PairingInvitation::new(cluster.id, cluster.coordinator_device_id.clone()).encode()?;
         cluster.invite_token = Some(token.clone());
-        Ok(token.clone())
+        Ok(token)
     })?;
     Ok(ControlResponse::InviteCreated { invite_token })
 }
 
 fn join_cluster(
     store: &ClusterStore,
+    identity: &LocalDeviceIdentity,
     endpoint: SocketAddr,
     coordinator: SocketAddr,
     invite_token: String,
     fail_after_remote_accepts: &AtomicUsize,
 ) -> Result<ControlResponse, TransportError> {
+    let invitation = PairingInvitation::decode(&invite_token)?;
     let existing = store.load()?;
     if let Some(cluster) = existing.cluster {
-        if cluster.coordinator == coordinator {
+        if cluster.coordinator == coordinator
+            && cluster.coordinator_device_id == invitation.coordinator_device_id
+            && cluster.id == invitation.cluster_id
+        {
             return Ok(ControlResponse::Joined {
                 cluster: cluster.summary(),
             });
@@ -405,6 +440,8 @@ fn join_cluster(
                     coordinator,
                     invite_token: invite_token.clone(),
                     request_id: crate::JoinRequestId::new(),
+                    cluster_id: invitation.cluster_id,
+                    coordinator_device_id: invitation.coordinator_device_id.clone(),
                 };
                 state.pending_join = Some(pending.clone());
                 Ok(pending)
@@ -420,6 +457,8 @@ fn join_cluster(
     };
     let response = match send_request(
         coordinator,
+        identity,
+        &pending.coordinator_device_id,
         RemoteRequest::RemoteJoin {
             invite_token: pending.invite_token.clone(),
             member,
@@ -427,7 +466,9 @@ fn join_cluster(
         },
     ) {
         Ok(response) => response,
-        Err(error @ TransportError::Remote { .. }) => {
+        Err(
+            error @ (TransportError::Remote { .. } | TransportError::PeerIdentityMismatch { .. }),
+        ) => {
             store.update(|state| {
                 if state
                     .pending_join
@@ -452,6 +493,14 @@ fn join_cluster(
             "coordinator returned an unexpected join response".into(),
         ));
     };
+    if cluster.id != pending.cluster_id
+        || cluster.coordinator_device_id != pending.coordinator_device_id
+    {
+        return Err(TransportError::PeerIdentityMismatch {
+            expected: pending.coordinator_device_id,
+            actual: cluster.coordinator_device_id,
+        });
+    }
     if fail_after_remote_accepts
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
             remaining.checked_sub(1)
@@ -484,6 +533,7 @@ fn join_cluster(
             id: saved_cluster.id,
             name: saved_cluster.name.clone(),
             coordinator: saved_cluster.coordinator,
+            coordinator_device_id: saved_cluster.coordinator_device_id.clone(),
             role: ClusterRole::Member,
             credential: credential.clone(),
             invite_token: None,
@@ -508,8 +558,12 @@ fn accept_member(
     invite_token: String,
     member: ClusterMember,
     join_request_id: crate::JoinRequestId,
+    peer_device_id: &kubeweft_model::DeviceId,
 ) -> Result<ControlResponse, TransportError> {
     validate_member(&member)?;
+    if member.device_id != *peer_device_id {
+        return Err(TransportError::Unauthorized);
+    }
     let credential = new_secret();
     let (cluster, credential, members) = store.update(|state| {
         let cluster = state.cluster.as_mut().ok_or(TransportError::NotInCluster)?;
@@ -563,7 +617,10 @@ fn accept_member(
     })
 }
 
-fn local_members(store: &ClusterStore) -> Result<ControlResponse, TransportError> {
+fn local_members(
+    store: &ClusterStore,
+    identity: &LocalDeviceIdentity,
+) -> Result<ControlResponse, TransportError> {
     let state = store.load()?;
     let cluster = state.cluster.ok_or(TransportError::NotInCluster)?;
     if cluster.role == ClusterRole::Coordinator {
@@ -574,6 +631,8 @@ fn local_members(store: &ClusterStore) -> Result<ControlResponse, TransportError
     }
     send_request(
         cluster.coordinator,
+        identity,
+        &cluster.coordinator_device_id,
         RemoteRequest::RemoteMembers {
             cluster_id: cluster.id,
             device_id: state.device_id,
@@ -587,13 +646,15 @@ fn remote_members(
     cluster_id: ClusterId,
     device_id: &kubeweft_model::DeviceId,
     credential: &str,
+    peer_device_id: &kubeweft_model::DeviceId,
 ) -> Result<ControlResponse, TransportError> {
     let state = store.load()?;
     let cluster = state.cluster.ok_or(TransportError::NotInCluster)?;
     if cluster.role != ClusterRole::Coordinator {
         return Err(TransportError::NotCoordinator);
     }
-    if cluster.id != cluster_id
+    if device_id != peer_device_id
+        || cluster.id != cluster_id
         || !cluster
             .members
             .iter()
@@ -605,18 +666,6 @@ fn remote_members(
         cluster: cluster.summary(),
         members: cluster.public_members(),
     })
-}
-
-fn require_plaintext_opt_in(config: &AgentConfig) -> Result<(), TransportError> {
-    let advertised_non_loopback = config
-        .advertise
-        .is_some_and(|address| address.ip().is_unspecified() || !address.ip().is_loopback());
-    if (!config.listen.ip().is_loopback() || advertised_non_loopback)
-        && !config.insecure_plaintext_lan
-    {
-        return Err(TransportError::InsecurePlaintextLanOptInRequired);
-    }
-    Ok(())
 }
 
 fn validate_cluster_name(name: String) -> Result<String, TransportError> {
@@ -661,7 +710,9 @@ fn error_response(error: TransportError) -> ControlResponse {
     let code = match error {
         TransportError::AgentUnavailable => "agent_unavailable",
         TransportError::AgentAlreadyRunning => "agent_already_running",
-        TransportError::InsecurePlaintextLanOptInRequired => "insecure_plaintext_lan_opt_in",
+        TransportError::InvalidIdentity(_) => "invalid_identity",
+        TransportError::SecureChannel(_) => "secure_channel",
+        TransportError::PeerIdentityMismatch { .. } => "peer_identity_mismatch",
         TransportError::NotCoordinator => "not_coordinator",
         TransportError::AlreadyInCluster => "already_in_cluster",
         TransportError::NotInCluster => "not_in_cluster",

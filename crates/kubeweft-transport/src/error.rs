@@ -1,13 +1,23 @@
 use std::fmt;
 
+use kubeweft_model::DeviceId;
+
 #[derive(Debug)]
 pub enum TransportError {
     Io(std::io::Error),
     InvalidMessage(String),
-    Remote { code: String, message: String },
+    Remote {
+        code: String,
+        message: String,
+    },
     AgentUnavailable,
     AgentAlreadyRunning,
-    InsecurePlaintextLanOptInRequired,
+    InvalidIdentity(String),
+    SecureChannel(String),
+    PeerIdentityMismatch {
+        expected: DeviceId,
+        actual: DeviceId,
+    },
     NotCoordinator,
     AlreadyInCluster,
     NotInCluster,
@@ -28,8 +38,15 @@ impl fmt::Display for TransportError {
             Self::AgentAlreadyRunning => {
                 formatter.write_str("another agent is already using this data directory")
             }
-            Self::InsecurePlaintextLanOptInRequired => formatter.write_str(
-                "non-loopback plaintext transport requires explicit insecure LAN opt-in",
+            Self::InvalidIdentity(message) => {
+                write!(formatter, "invalid device identity: {message}")
+            }
+            Self::SecureChannel(message) => {
+                write!(formatter, "secure peer channel failed: {message}")
+            }
+            Self::PeerIdentityMismatch { expected, actual } => write!(
+                formatter,
+                "peer identity mismatch: expected {expected}, received {actual}"
             ),
             Self::NotCoordinator => {
                 formatter.write_str("this device is not the cluster coordinator")
@@ -37,7 +54,9 @@ impl fmt::Display for TransportError {
             Self::AlreadyInCluster => formatter.write_str("device already belongs to a cluster"),
             Self::NotInCluster => formatter.write_str("device does not belong to a cluster"),
             Self::InvalidInvite => formatter.write_str("invalid or expired cluster invite"),
-            Self::Unauthorized => formatter.write_str("cluster membership credential is invalid"),
+            Self::Unauthorized => {
+                formatter.write_str("peer identity or cluster membership credential is invalid")
+            }
             Self::Conflict => formatter.write_str("cluster state changed concurrently"),
         }
     }
