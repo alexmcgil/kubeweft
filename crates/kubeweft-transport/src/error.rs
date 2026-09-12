@@ -6,6 +6,8 @@ pub enum TransportError {
     InvalidMessage(String),
     Remote { code: String, message: String },
     AgentUnavailable,
+    AgentAlreadyRunning,
+    InsecurePlaintextLanOptInRequired,
     NotCoordinator,
     AlreadyInCluster,
     NotInCluster,
@@ -23,13 +25,19 @@ impl fmt::Display for TransportError {
             }
             Self::Remote { code, message } => write!(formatter, "remote error {code}: {message}"),
             Self::AgentUnavailable => formatter.write_str("local agent is not running"),
+            Self::AgentAlreadyRunning => {
+                formatter.write_str("another agent is already using this data directory")
+            }
+            Self::InsecurePlaintextLanOptInRequired => formatter.write_str(
+                "non-loopback plaintext transport requires explicit insecure LAN opt-in",
+            ),
             Self::NotCoordinator => {
                 formatter.write_str("this device is not the cluster coordinator")
             }
             Self::AlreadyInCluster => formatter.write_str("device already belongs to a cluster"),
             Self::NotInCluster => formatter.write_str("device does not belong to a cluster"),
             Self::InvalidInvite => formatter.write_str("invalid or expired cluster invite"),
-            Self::Unauthorized => formatter.write_str("cluster member authentication failed"),
+            Self::Unauthorized => formatter.write_str("cluster membership credential is invalid"),
             Self::Conflict => formatter.write_str("cluster state changed concurrently"),
         }
     }

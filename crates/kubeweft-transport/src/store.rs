@@ -1,20 +1,22 @@
 use std::{
     fs,
     io::Write,
-    net::SocketAddr,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
 use fs2::FileExt;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::{AgentState, TransportError, domain::new_device_id};
+
+pub(crate) struct AgentDirectoryLock {
+    _file: fs::File,
+}
 
 #[derive(Clone)]
 pub struct ClusterStore {
     state_path: PathBuf,
-    runtime_path: PathBuf,
     lock_path: PathBuf,
     process_lock: Arc<Mutex<()>>,
 }
@@ -26,9 +28,9 @@ impl ClusterStore {
     ) -> Result<Self, TransportError> {
         let data_directory = data_directory.as_ref();
         fs::create_dir_all(data_directory)?;
+        set_private_directory_permissions(data_directory)?;
         let store = Self {
             state_path: data_directory.join("cluster.json"),
-            runtime_path: data_directory.join("agent.json"),
             lock_path: data_directory.join("cluster.lock"),
             process_lock: Arc::new(Mutex::new(())),
         };
@@ -51,12 +53,35 @@ impl ClusterStore {
                     device_id: new_device_id(),
                     device_name: name,
                     cluster: None,
+                    pending_join: None,
                 })?;
             } else {
                 store.read_state()?;
             }
         }
         Ok(store)
+    }
+
+    pub(crate) fn acquire_agent_lock(
+        data_directory: impl AsRef<Path>,
+    ) -> Result<AgentDirectoryLock, TransportError> {
+        let data_directory = data_directory.as_ref();
+        fs::create_dir_all(data_directory)?;
+        set_private_directory_permissions(data_directory)?;
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(data_directory.join("agent.lock"))?;
+        FileExt::try_lock_exclusive(&file).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                TransportError::AgentAlreadyRunning
+            } else {
+                error.into()
+            }
+        })?;
+        Ok(AgentDirectoryLock { _file: file })
     }
 
     pub fn load(&self) -> Result<AgentState, TransportError> {
@@ -84,23 +109,6 @@ impl ClusterStore {
         state.revision = state.revision.saturating_add(1);
         self.write_state(&state)?;
         Ok(result)
-    }
-
-    pub fn write_runtime_endpoint(&self, endpoint: SocketAddr) -> Result<(), TransportError> {
-        self.write_json(&self.runtime_path, &RuntimeState { endpoint })
-    }
-
-    pub fn read_runtime_endpoint(&self) -> Result<SocketAddr, TransportError> {
-        let bytes = fs::read(&self.runtime_path).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                TransportError::AgentUnavailable
-            } else {
-                error.into()
-            }
-        })?;
-        let state: RuntimeState = serde_json::from_slice(&bytes)
-            .map_err(|error| TransportError::InvalidMessage(error.to_string()))?;
-        Ok(state.endpoint)
     }
 
     fn read_state(&self) -> Result<AgentState, TransportError> {
@@ -135,11 +143,6 @@ impl ClusterStore {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-struct RuntimeState {
-    endpoint: SocketAddr,
-}
-
 fn normalize_device_name(name: String) -> Result<String, TransportError> {
     let name = name.trim();
     if name.is_empty() || name.len() > 128 || name.chars().any(char::is_control) {
@@ -158,7 +161,20 @@ fn set_private_permissions(path: &Path) -> Result<(), TransportError> {
     Ok(())
 }
 
+#[cfg(unix)]
+fn set_private_directory_permissions(path: &Path) -> Result<(), TransportError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
 #[cfg(not(unix))]
 fn set_private_permissions(_path: &Path) -> Result<(), TransportError> {
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_private_directory_permissions(_path: &Path) -> Result<(), TransportError> {
     Ok(())
 }

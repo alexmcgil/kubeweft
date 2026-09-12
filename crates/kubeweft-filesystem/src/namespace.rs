@@ -4,8 +4,9 @@ use std::{
 };
 
 use crate::{
-    DirectoryId, DirectoryMetadata, FileId, FileMetadata, FileType, FilesystemError,
-    MetadataSnapshot, MetadataStore, NamespaceEntry, NamespaceTarget, path::FsPath,
+    ContentRetention, DirectoryId, DirectoryMetadata, FileId, FileMetadata, FileType,
+    FilesystemError, MetadataSnapshot, MetadataStore, NamespaceEntry, NamespaceTarget,
+    path::FsPath,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -184,7 +185,19 @@ impl Namespace {
                 .ok_or(FilesystemError::NotFound)?;
             match snapshot.entries[index].target {
                 NamespaceTarget::File(id) => {
-                    snapshot.files.remove(&id);
+                    let removed = snapshot.files.remove(&id);
+                    if let Some(manifest) = removed.and_then(|file| file.manifest) {
+                        for chunk in manifest.chunks {
+                            if !snapshot.is_content_live_referenced(&chunk.content_id)
+                                && snapshot.retentions.get(&chunk.content_id)
+                                    != Some(&ContentRetention::Snapshot)
+                            {
+                                snapshot
+                                    .retentions
+                                    .insert(chunk.content_id, ContentRetention::GarbageCandidate);
+                            }
+                        }
+                    }
                 }
                 NamespaceTarget::Directory(id) => {
                     if snapshot.entries.iter().any(|entry| entry.parent == id) {

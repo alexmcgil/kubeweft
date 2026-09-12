@@ -45,6 +45,20 @@ message JoinClusterResponse {
   Cluster cluster = 1;
 }
 
+// Peer-side idempotent join transaction. Retrying the same request id for the
+// same device returns the originally issued membership credential.
+message AcceptClusterJoinRequest {
+  string invite_token = 1;
+  ClusterMember member = 2;
+  JoinRequestId join_request_id = 3;
+}
+
+message AcceptClusterJoinResponse {
+  Cluster cluster = 1;
+  string membership_credential = 2;
+  repeated ClusterMember members = 3;
+}
+
 message ListClusterMembersRequest {
   ClusterId cluster_id = 1;
 }
@@ -52,4 +66,10 @@ message ListClusterMembersRequest {
 message ListClusterMembersResponse {
   Cluster cluster = 1;
   repeated ClusterMember members = 2;
+}
+
+message ListRemoteClusterMembersRequest {
+  ClusterId cluster_id = 1;
+  DeviceId device_id = 2;
+  string membership_credential = 3;
 }

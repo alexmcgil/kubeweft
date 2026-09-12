@@ -38,13 +38,13 @@ The control plane discovers devices, advertises capabilities, authorizes access,
 
 Large data should use a direct path whenever practical. For example, an Android device can issue a control request to a Linux PC, while a Sunshine/Moonlight stream flows directly from the Linux PC to Android. Likewise, a phone can submit a control request while a server streams DLNA media directly to a TV. Controllers coordinate existing mature technologies; they should not become unnecessary media or file proxies.
 
-The current development transport uses UDP LAN discovery and framed JSON over TCP. Cluster creation elects the creating agent as the authoritative coordinator; other devices join explicitly with a one-use invite. Membership credentials authorize only the small cluster control API. Encryption, cryptographic device identity, coordinator failover, and consensus remain future work.
+The current private development transport uses UDP discovery hints and framed JSON over TCP. Discovery is untrusted and network reachability grants no authority. Linux privileged control uses a user-only Unix socket, never loopback IP as authorization. Cluster creation makes the creating agent a temporary membership coordinator; a persistent join transaction makes invite consumption retry-safe. A validated membership credential is a bearer credential, not cryptographic device identity or network peer authentication. Non-loopback plaintext requires explicit insecure opt-in and must not carry user file data. Protobuf files remain the cross-language semantic source of truth; framing is a replaceable transport detail (see [ADR 0001](adr/0001-development-transport-boundary.md)).
 
 ## Logical filesystem
 
 Kubeweft exposes one cluster-owned namespace: paths and stable file identities do not contain placement information. Devices contribute content storage, while metadata and files belong to the cluster.
 
-Content is immutable and SHA-256-addressed. Writes advance metadata generations with compare-and-swap. Replication reconciles desired and actual copies, and an unavailable replica never removes the file from the namespace.
+Content is immutable and SHA-256-addressed. Writes advance metadata generations with compare-and-swap. Stored blobs are distinct from retained content: live file references (and future snapshot retention) receive replication, while garbage candidates remain stored until future GC without gaining replicas. Replica state is merged into the current placement during CAS retries, and an unavailable replica never removes the file from the namespace. Filesystem metadata remains independent of the temporary membership coordinator; it will need its own consensus-backed model.
 
 ## Agents, adapters, and trust
 
@@ -66,4 +66,4 @@ Qt 6/Qt Quick/QML code stays inside the desktop application. The desktop process
 
 ## Protocol and manifests
 
-Protocol Buffers in `protocol/proto/` are language-neutral and transport-neutral; they do not commit Kubeweft to gRPC. Schema-defined, human-facing manifests are eventually deserialized into typed internal models, never treated as arbitrary YAML values at runtime. Protocol evolution must preserve compatibility, including never reusing removed protobuf field numbers.
+Protocol Buffers in `protocol/proto/` are language-neutral and transport-neutral; they do not commit Kubeweft to gRPC. Transport framing is not domain protocol. The current Rust JSON envelopes are private scaffolding and must migrate to generated protobuf payloads before Android networking. Schema-defined, human-facing manifests are eventually deserialized into typed internal models, never treated as arbitrary YAML values at runtime. Protocol evolution must preserve compatibility, including never reusing removed protobuf field numbers.

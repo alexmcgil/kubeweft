@@ -16,9 +16,10 @@ use crate::{ClusterStore, ClusterSummary, TransportError, wire::PROTOCOL_VERSION
 
 pub const DEFAULT_DISCOVERY_PORT: u16 = 37_845;
 const MULTICAST_ADDRESS: Ipv4Addr = Ipv4Addr::new(239, 255, 87, 77);
-const DISCOVERY_MAGIC: &str = "kubeweft-discovery-v1";
+const DISCOVERY_MAGIC: &str = "kubeweft-discovery-v2";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Untrusted reachability hint; callers must not infer identity or membership.
 pub struct DiscoveryAnnouncement {
     pub device_id: DeviceId,
     pub device_name: String,
@@ -33,6 +34,7 @@ struct DiscoveryPacket {
     announcement: DiscoveryAnnouncement,
 }
 
+/// Collects untrusted LAN announcements without establishing trust.
 pub fn discover(
     discovery_port: u16,
     timeout: Duration,

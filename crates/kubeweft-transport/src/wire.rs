@@ -7,21 +7,23 @@ use std::{
 use kubeweft_model::DeviceId;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use crate::{ClusterId, ClusterMember, ClusterSummary, MembershipStatus, TransportError};
+use crate::{
+    ClusterId, ClusterMember, ClusterSummary, JoinRequestId, MembershipStatus, TransportError,
+};
 
-pub(crate) const PROTOCOL_VERSION: u16 = 1;
+pub(crate) const PROTOCOL_VERSION: u16 = 2;
 const MAX_FRAME_SIZE: usize = 1024 * 1024;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct RequestEnvelope {
+pub(crate) struct RequestEnvelope<T> {
     pub version: u16,
-    pub request: ControlRequest,
+    pub request: T,
 }
 
+/// Private development-only local IPC messages. These are not a public wire contract.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub(crate) enum ControlRequest {
-    Ping,
+pub(crate) enum LocalRequest {
     LocalStatus,
     CreateCluster {
         name: String,
@@ -32,9 +34,17 @@ pub(crate) enum ControlRequest {
         invite_token: String,
     },
     LocalMembers,
+}
+
+/// Private development-only peer messages. Cross-language semantics live in proto.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum RemoteRequest {
+    Ping,
     RemoteJoin {
         invite_token: String,
         member: ClusterMember,
+        join_request_id: JoinRequestId,
     },
     RemoteMembers {
         cluster_id: ClusterId,
@@ -85,7 +95,7 @@ pub(crate) enum ControlResponse {
 
 pub(crate) fn send_request(
     endpoint: SocketAddr,
-    request: ControlRequest,
+    request: RemoteRequest,
 ) -> Result<ControlResponse, TransportError> {
     let mut stream = TcpStream::connect_timeout(&endpoint, Duration::from_secs(3)).map_err(
         |error| match error.kind() {
@@ -117,7 +127,7 @@ pub(crate) fn send_request(
     }
 }
 
-pub(crate) fn read_frame<T: DeserializeOwned>(stream: &mut TcpStream) -> Result<T, TransportError> {
+pub(crate) fn read_frame<T: DeserializeOwned>(stream: &mut impl Read) -> Result<T, TransportError> {
     let mut size = [0_u8; 4];
     stream.read_exact(&mut size)?;
     let size = usize::try_from(u32::from_be_bytes(size))
@@ -133,7 +143,7 @@ pub(crate) fn read_frame<T: DeserializeOwned>(stream: &mut TcpStream) -> Result<
 }
 
 pub(crate) fn write_frame<T: Serialize>(
-    stream: &mut TcpStream,
+    stream: &mut impl Write,
     value: &T,
 ) -> Result<(), TransportError> {
     let bytes = serde_json::to_vec(value)?;

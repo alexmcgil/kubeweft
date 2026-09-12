@@ -41,18 +41,18 @@ impl ReplicationReconciler {
         let content_ids = self
             .metadata
             .load()?
-            .placements
-            .keys()
-            .cloned()
+            .retained_content_ids()
+            .into_iter()
             .collect::<Vec<_>>();
         let mut report = ReconcileReport::default();
         for content_id in content_ids {
             report.replicas_created += self.reconcile_content(&content_id)?;
             let snapshot = self.metadata.load()?;
-            if snapshot
-                .placements
-                .get(&content_id)
-                .is_some_and(|placement| placement.durability() == DurabilityStatus::Degraded)
+            if snapshot.is_content_retained(&content_id)
+                && snapshot
+                    .placements
+                    .get(&content_id)
+                    .is_some_and(|placement| placement.durability() == DurabilityStatus::Degraded)
             {
                 report.degraded_contents.push(content_id);
             }
@@ -61,16 +61,19 @@ impl ReplicationReconciler {
     }
 
     fn reconcile_content(&self, content_id: &ContentId) -> Result<usize, FilesystemError> {
-        let original = self
-            .metadata
-            .load()?
+        let initial = self.metadata.load()?;
+        if !initial.is_content_retained(content_id) {
+            return Ok(0);
+        }
+        let original = initial
             .placements
             .get(content_id)
             .cloned()
             .ok_or(FilesystemError::ContentUnavailable)?;
         let before = original.durability();
-        let refreshed = self.refresh_replicas(&original)?;
-        self.store_placement(refreshed.clone())?;
+        let Some(refreshed) = self.refresh_current_placement(content_id)? else {
+            return Ok(0);
+        };
 
         let nodes = self.registry.nodes()?;
         let desired_nodes = self.policy.desired_nodes(PlacementRequest {
@@ -82,9 +85,11 @@ impl ReplicationReconciler {
 
         let mut created = 0;
         for destination in desired_nodes {
-            let current = self
-                .metadata
-                .load()?
+            let current_snapshot = self.metadata.load()?;
+            if !current_snapshot.is_content_retained(content_id) {
+                break;
+            }
+            let current = current_snapshot
                 .placements
                 .get(content_id)
                 .cloned()
@@ -150,43 +155,47 @@ impl ReplicationReconciler {
         Ok(created)
     }
 
-    fn refresh_replicas(
+    fn refresh_replica_states(
         &self,
         placement: &ContentPlacement,
-    ) -> Result<ContentPlacement, FilesystemError> {
-        let mut refreshed = placement.clone();
-        for replica in &mut refreshed.replicas {
+    ) -> Result<Vec<(DeviceId, ReplicaState)>, FilesystemError> {
+        let mut refreshed = Vec::with_capacity(placement.replicas.len());
+        for replica in &placement.replicas {
+            let state;
             let Ok(node) = self.registry.node(&replica.node_id) else {
-                replica.state = ReplicaState::Missing;
+                refreshed.push((replica.node_id.clone(), ReplicaState::Missing));
                 continue;
             };
             if !node.online {
                 // Offline means the recorded copy still exists but cannot be checked now.
-                if !matches!(
+                state = if matches!(
                     replica.state,
                     ReplicaState::Missing | ReplicaState::Corrupted
                 ) {
-                    replica.state = ReplicaState::Offline;
-                }
+                    replica.state
+                } else {
+                    ReplicaState::Offline
+                };
+                refreshed.push((replica.node_id.clone(), state));
                 continue;
             }
             let store = self.registry.store(&replica.node_id)?;
             if !store.exists(&placement.content_id)? {
-                replica.state = ReplicaState::Missing;
+                refreshed.push((replica.node_id.clone(), ReplicaState::Missing));
                 continue;
             }
             let bytes = match store.get(&placement.content_id) {
                 Ok(bytes) => bytes,
                 Err(FilesystemError::ContentUnavailable) => {
-                    replica.state = ReplicaState::Missing;
+                    refreshed.push((replica.node_id.clone(), ReplicaState::Missing));
                     continue;
                 }
                 Err(error) => return Err(error),
             };
             if placement.content_id.matches(&bytes) {
-                replica.state = ReplicaState::Healthy;
+                refreshed.push((replica.node_id.clone(), ReplicaState::Healthy));
             } else {
-                replica.state = ReplicaState::Corrupted;
+                refreshed.push((replica.node_id.clone(), ReplicaState::Corrupted));
                 self.events.emit(FilesystemEvent::ReplicaCorrupted {
                     content_id: placement.content_id.clone(),
                     node_id: replica.node_id.clone(),
@@ -194,6 +203,44 @@ impl ReplicationReconciler {
             }
         }
         Ok(refreshed)
+    }
+
+    fn refresh_current_placement(
+        &self,
+        content_id: &ContentId,
+    ) -> Result<Option<ContentPlacement>, FilesystemError> {
+        for _ in 0..8 {
+            let mut snapshot = self.metadata.load()?;
+            if !snapshot.is_content_retained(content_id) {
+                return Ok(None);
+            }
+            let current = snapshot
+                .placements
+                .get(content_id)
+                .cloned()
+                .ok_or(FilesystemError::ContentUnavailable)?;
+            let states = self.refresh_replica_states(&current)?;
+            let placement = snapshot
+                .placements
+                .get_mut(content_id)
+                .ok_or(FilesystemError::ContentUnavailable)?;
+            for (node_id, state) in states {
+                if let Some(replica) = placement
+                    .replicas
+                    .iter_mut()
+                    .find(|replica| replica.node_id == node_id)
+                {
+                    replica.state = state;
+                }
+            }
+            let refreshed = placement.clone();
+            match self.metadata.compare_and_swap(snapshot) {
+                Ok(()) => return Ok(Some(refreshed)),
+                Err(FilesystemError::Conflict) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(FilesystemError::Conflict)
     }
 
     fn find_source(
@@ -254,11 +301,6 @@ impl ReplicationReconciler {
         })
     }
 
-    fn store_placement(&self, placement: ContentPlacement) -> Result<(), FilesystemError> {
-        let content_id = placement.content_id.clone();
-        self.mutate_placement(&content_id, |current| *current = placement.clone())
-    }
-
     fn mutate_placement(
         &self,
         content_id: &ContentId,
@@ -266,6 +308,9 @@ impl ReplicationReconciler {
     ) -> Result<(), FilesystemError> {
         for _ in 0..8 {
             let mut snapshot = self.metadata.load()?;
+            if !snapshot.is_content_retained(content_id) {
+                return Ok(());
+            }
             let placement = snapshot
                 .placements
                 .get_mut(content_id)

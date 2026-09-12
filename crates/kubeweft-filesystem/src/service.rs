@@ -3,10 +3,10 @@ use std::sync::Arc;
 use kubeweft_model::DeviceId;
 
 use crate::{
-    ContentManifest, ContentPlacement, ContentStoreRegistry, DefaultPlacementPolicy,
-    DurabilityStatus, EntryMetadata, EventSink, FileMetadata, FileVersion, FilesystemError,
-    FilesystemEvent, ListedEntry, MetadataStore, Namespace, NamespaceTarget, PlacementPolicy,
-    Replica, ReplicaState, event::NoopEventSink, namespace::now_millis,
+    ContentManifest, ContentPlacement, ContentRetention, ContentStoreRegistry,
+    DefaultPlacementPolicy, DurabilityStatus, EntryMetadata, EventSink, FileMetadata, FileVersion,
+    FilesystemError, FilesystemEvent, ListedEntry, MetadataStore, Namespace, NamespaceTarget,
+    PlacementPolicy, Replica, ReplicaState, event::NoopEventSink, namespace::now_millis,
 };
 
 #[derive(Clone)]
@@ -123,6 +123,18 @@ impl FilesystemService {
 
         let content_id = self.registry.put_on(source_node, data)?;
         let mut snapshot = self.namespace.metadata_store().load()?;
+        let previous_content = snapshot
+            .files
+            .get(&file_id)
+            .and_then(|file| file.manifest.as_ref())
+            .map(|manifest| {
+                manifest
+                    .chunks
+                    .iter()
+                    .map(|chunk| chunk.content_id.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         let file = snapshot.files.get_mut(&file_id).ok_or_else(|| {
             FilesystemError::MetadataUnavailable("namespace file has no metadata".into())
         })?;
@@ -163,6 +175,26 @@ impl FilesystemService {
             }
         };
         let durability = placement.durability();
+        snapshot
+            .retentions
+            .insert(content_id.clone(), ContentRetention::LiveReference);
+        for previous in previous_content {
+            let still_referenced = snapshot.files.values().any(|file| {
+                file.manifest.as_ref().is_some_and(|manifest| {
+                    manifest
+                        .chunks
+                        .iter()
+                        .any(|chunk| chunk.content_id == previous)
+                })
+            });
+            if !still_referenced
+                && snapshot.retentions.get(&previous) != Some(&ContentRetention::Snapshot)
+            {
+                snapshot
+                    .retentions
+                    .insert(previous, ContentRetention::GarbageCandidate);
+            }
+        }
 
         // A failed CAS can leave an unreferenced immutable blob; future GC owns it.
         self.namespace.metadata_store().compare_and_swap(snapshot)?;
