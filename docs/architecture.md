@@ -38,6 +38,8 @@ The control plane discovers devices, advertises capabilities, authorizes access,
 
 Large data should use a direct path whenever practical. For example, an Android device can issue a control request to a Linux PC, while a Sunshine/Moonlight stream flows directly from the Linux PC to Android. Likewise, a phone can submit a control request while a server streams DLNA media directly to a TV. Controllers coordinate existing mature technologies; they should not become unnecessary media or file proxies.
 
+The current development transport uses UDP LAN discovery and framed JSON over TCP. Cluster creation elects the creating agent as the authoritative coordinator; other devices join explicitly with a one-use invite. Membership credentials authorize only the small cluster control API. Encryption, cryptographic device identity, coordinator failover, and consensus remain future work.
+
 ## Logical filesystem
 
 Kubeweft exposes one cluster-owned namespace: paths and stable file identities do not contain placement information. Devices contribute content storage, while metadata and files belong to the cluster.
@@ -54,7 +56,7 @@ Network membership or VPN reachability is not trust and never grants capability 
 
 Plugins are future out-of-process processes communicating with an agent through IPC. Kubeweft will not use in-process Rust ABI plugins or `dlopen` as the plugin architecture.
 
-The desktop path is documentation-only in this iteration. Its intended flow is:
+The desktop currently uses an in-process bridge for local filesystem development. Its intended networked flow is:
 
 ```text
 QML UI -> thin Qt/Rust bridge -> desktop client logic -> local kubeweft-agent IPC

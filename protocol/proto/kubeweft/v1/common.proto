@@ -9,6 +9,10 @@ message DeviceId {
   string value = 1;
 }
 
+message ClusterId {
+  string value = 1;
+}
+
 message CapabilityId {
   string value = 1;
 }

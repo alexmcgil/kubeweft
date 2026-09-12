@@ -136,6 +136,7 @@ name = "kubeweft-agent-linux"
 version = "0.1.0"
 dependencies = [
  "kubeweft-agent-core",
+ "kubeweft-transport",
 ]
 
 [[package]]
@@ -151,6 +152,7 @@ version = "0.1.0"
 dependencies = [
  "kubeweft-filesystem",
  "kubeweft-local",
+ "kubeweft-transport",
 ]
 
 [[package]]
@@ -223,6 +225,18 @@ name = "kubeweft-scheduler"
 version = "0.1.0"
 dependencies = [
  "kubeweft-model",
+]
+
+[[package]]
+name = "kubeweft-transport"
+version = "0.1.0"
+dependencies = [
+ "fs2",
+ "kubeweft-model",
+ "serde",
+ "serde_json",
+ "socket2",
+ "uuid",
 ]
 
 [[package]]
@@ -340,6 +354,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
+name = "socket2"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
+dependencies = [
+ "libc",
+ "windows-sys",
+]
+
+[[package]]
 name = "syn"
 version = "3.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -446,6 +470,21 @@ name = "winapi-x86_64-pc-windows-gnu"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
+
+[[package]]
+name = "windows-link"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
+
+[[package]]
+name = "windows-sys"
+version = "0.61.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
+dependencies = [
+ "windows-link",
+]
 
 [[package]]
 name = "zmij"

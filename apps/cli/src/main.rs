@@ -4,10 +4,12 @@ use std::{
     io::{self, Read},
     path::PathBuf,
     process::ExitCode,
+    time::Duration,
 };
 
 use kubeweft_filesystem::{EntryMetadata, FileType, FilesystemError};
 use kubeweft_local::LocalFilesystem;
+use kubeweft_transport::{ClusterRole, ControlClient, TransportError, discover};
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1).collect()) {
@@ -24,6 +26,10 @@ fn main() -> ExitCode {
             eprintln!("I/O error: {error}");
             ExitCode::FAILURE
         }
+        Err(CliError::Transport(error)) => {
+            eprintln!("transport error: {error}");
+            ExitCode::FAILURE
+        }
     }
 }
 
@@ -38,21 +44,21 @@ fn run(mut arguments: Vec<OsString>) -> Result<(), CliError> {
     }
     if arguments.as_slice() == ["doctor"] {
         println!("local filesystem: ready");
-        println!("cluster connectivity: not configured");
+        println!("cluster connectivity: available through kubeweft-agent");
         println!("platform capabilities: not configured");
         return Ok(());
     }
 
     let data_directory = take_data_directory(&mut arguments)?;
-    if arguments.first().is_none_or(|argument| argument != "fs") {
-        return Err(CliError::Usage(format!(
-            "unknown command: {}",
-            arguments
-                .first()
-                .map_or_else(String::new, |value| value.to_string_lossy().into_owned())
-        )));
+    let command_group = take_utf8(&mut arguments, "command")?;
+    match command_group.as_str() {
+        "fs" => run_filesystem(arguments, data_directory),
+        "cluster" => run_cluster(arguments, data_directory),
+        _ => Err(CliError::Usage(format!("unknown command: {command_group}"))),
     }
-    arguments.remove(0);
+}
+
+fn run_filesystem(mut arguments: Vec<OsString>, data_directory: PathBuf) -> Result<(), CliError> {
     let command = take_utf8(&mut arguments, "filesystem command")?;
     let local = LocalFilesystem::open(data_directory)?;
 
@@ -108,6 +114,130 @@ fn run(mut arguments: Vec<OsString>) -> Result<(), CliError> {
         }
     }
     Ok(())
+}
+
+fn run_cluster(mut arguments: Vec<OsString>, data_directory: PathBuf) -> Result<(), CliError> {
+    let command = take_utf8(&mut arguments, "cluster command")?;
+    if command == "discover" {
+        let discovery_port = take_named_u16(&mut arguments, "--port")?.unwrap_or(37_845);
+        let timeout = take_named_u64(&mut arguments, "--timeout-ms")?.unwrap_or(1_200);
+        ensure_empty(&arguments)?;
+        for instance in discover(discovery_port, Duration::from_millis(timeout))? {
+            let cluster = instance
+                .cluster
+                .map_or_else(|| "-".to_owned(), |cluster| cluster.name);
+            println!(
+                "{}\t{}\t{}\t{}",
+                instance.device_id, instance.device_name, instance.endpoint, cluster
+            );
+        }
+        return Ok(());
+    }
+
+    let client = ControlClient::local(data_directory)?;
+    match command.as_str() {
+        "status" => {
+            ensure_empty(&arguments)?;
+            let status = client.status()?;
+            println!("device\t{}\t{}", status.device_id, status.device_name);
+            match (status.cluster, status.role) {
+                (Some(cluster), Some(role)) => println!(
+                    "cluster\t{}\t{}\t{}\t{}",
+                    cluster.id,
+                    cluster.name,
+                    cluster.coordinator,
+                    role_name(role)
+                ),
+                _ => println!("cluster\t-"),
+            }
+        }
+        "create" => {
+            let name = take_utf8(&mut arguments, "cluster name")?;
+            ensure_empty(&arguments)?;
+            let (cluster, invite_token) = client.create_cluster(name)?;
+            println!("cluster\t{}\t{}", cluster.id, cluster.name);
+            println!("coordinator\t{}", cluster.coordinator);
+            println!("invite\t{invite_token}");
+        }
+        "invite" => {
+            ensure_empty(&arguments)?;
+            println!("invite\t{}", client.create_invite()?);
+        }
+        "join" => {
+            let coordinator = take_utf8(&mut arguments, "coordinator endpoint")?
+                .parse()
+                .map_err(|_| CliError::Usage("invalid coordinator endpoint".into()))?;
+            let invite_token = take_utf8(&mut arguments, "invite token")?;
+            ensure_empty(&arguments)?;
+            let cluster = client.join_cluster(coordinator, invite_token)?;
+            println!("cluster\t{}\t{}", cluster.id, cluster.name);
+            println!("coordinator\t{}", cluster.coordinator);
+        }
+        "members" => {
+            ensure_empty(&arguments)?;
+            let (cluster, members) = client.members()?;
+            println!("cluster\t{}\t{}", cluster.id, cluster.name);
+            for member in members {
+                let role = if member.endpoint == cluster.coordinator {
+                    "coordinator"
+                } else {
+                    "member"
+                };
+                println!(
+                    "{}\t{}\t{}\t{}",
+                    member.device_id, member.device_name, member.endpoint, role
+                );
+            }
+        }
+        _ => {
+            return Err(CliError::Usage(format!(
+                "unknown cluster command: {command}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn role_name(role: ClusterRole) -> &'static str {
+    match role {
+        ClusterRole::Coordinator => "coordinator",
+        ClusterRole::Member => "member",
+    }
+}
+
+fn take_named_u16(arguments: &mut Vec<OsString>, name: &str) -> Result<Option<u16>, CliError> {
+    take_named_u64(arguments, name)?
+        .map(|value| {
+            value
+                .try_into()
+                .map_err(|_| CliError::Usage(format!("invalid value for {name}")))
+        })
+        .transpose()
+}
+
+fn take_named_u64(arguments: &mut Vec<OsString>, name: &str) -> Result<Option<u64>, CliError> {
+    let Some(index) = arguments.iter().position(|argument| argument == name) else {
+        return Ok(None);
+    };
+    arguments.remove(index);
+    if index >= arguments.len() {
+        return Err(CliError::Usage(format!("missing value for {name}")));
+    }
+    take_utf8_at(arguments, index, name)?
+        .parse()
+        .map(Some)
+        .map_err(|_| CliError::Usage(format!("invalid value for {name}")))
+}
+
+fn take_utf8_at(
+    arguments: &mut Vec<OsString>,
+    index: usize,
+    name: &str,
+) -> Result<String, CliError> {
+    arguments
+        .remove(index)
+        .into_string()
+        .map_err(|_| CliError::Usage(format!("{name} must be valid UTF-8")))
 }
 
 fn take_data_directory(arguments: &mut Vec<OsString>) -> Result<PathBuf, CliError> {
@@ -189,14 +319,17 @@ fn ensure_empty(arguments: &[OsString]) -> Result<(), CliError> {
 }
 
 fn print_help() {
-    println!("kubeweft [--data-dir DIR] fs <command>");
-    println!("commands: init [USER], mkdir PATH, create PATH, ls [PATH], stat PATH");
+    println!("kubeweft [--data-dir DIR] <fs|cluster> <command>");
+    println!("filesystem: init [USER], mkdir PATH, create PATH, ls [PATH], stat PATH");
     println!("          cat PATH, write PATH [--expect GENERATION], mv FROM TO, rm PATH");
+    println!("cluster:  status, create NAME, invite, join ENDPOINT TOKEN, members");
+    println!("          discover [--port PORT] [--timeout-ms MILLISECONDS]");
 }
 
 enum CliError {
     Usage(String),
     Filesystem(FilesystemError),
+    Transport(TransportError),
     Io(io::Error),
 }
 
@@ -209,5 +342,11 @@ impl From<FilesystemError> for CliError {
 impl From<io::Error> for CliError {
     fn from(error: io::Error) -> Self {
         Self::Io(error)
+    }
+}
+
+impl From<TransportError> for CliError {
+    fn from(error: TransportError) -> Self {
+        Self::Transport(error)
     }
 }

@@ -4,7 +4,7 @@
 
 Kubeweft is a personal distributed operating layer for coordinating capabilities across user-owned devices. It describes devices, resources, applications, services, policies, and jobs without making a particular operating system or integration part of the core model.
 
-Kubeweft is **not Kubernetes**, a Kubernetes distribution, or a replacement for existing media, container, remote-desktop, or networking technologies. It does not yet implement networking, pairing, production persistence, or platform capabilities.
+Kubeweft is **not Kubernetes**, a Kubernetes distribution, or a replacement for existing media, container, remote-desktop, or networking technologies. It does not yet implement encrypted networking, cryptographic device identity, consensus, or production platform capabilities.
 
 ## Architecture in brief
 
@@ -40,6 +40,8 @@ just android-check
 ```
 
 `just build` produces release CLI/agent binaries, the Qt desktop application, and an Android debug APK. Android builds require SDK platform 35 via `ANDROID_HOME` or `ANDROID_SDK_ROOT`. CLI and desktop share local state through `KUBEWEFT_DATA_DIR` (default: the platform application-data directory).
+
+For a local two-agent cluster, start agents with separate data directories, run `kubeweft --data-dir <first> cluster create home`, then use the returned endpoint and invite with `kubeweft --data-dir <second> cluster join <endpoint> <token>`. `cluster discover` finds agents on the LAN and `cluster members` shows joined devices. Across hosts, start the agent with `--listen 0.0.0.0:37846 --advertise <LAN-IP>:37846`; this development transport is plaintext.
 
 ## Contributing and security
 

@@ -11,6 +11,7 @@ members = [
     "crates/kubeweft-local",
     "crates/kubeweft-plugin-sdk",
     "crates/kubeweft-protocol",
+    "crates/kubeweft-transport",
     "apps/cli",
     "apps/desktop/bridge",
     "agents/linux",
