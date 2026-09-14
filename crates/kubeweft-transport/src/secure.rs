@@ -15,6 +15,7 @@ const PROLOGUE: &[u8] = b"kubeweft-peer-channel-v1";
 const MAX_HANDSHAKE_FRAME: usize = 512;
 const MAX_CIPHERTEXT_FRAME: usize = 65_535;
 const MAX_PLAINTEXT_FRAME: usize = MAX_CIPHERTEXT_FRAME - 16;
+pub(crate) const MAX_CONTENT_TRANSFER_SIZE: u64 = 256 * 1024 * 1024;
 
 pub(crate) fn noise_parameters() -> Result<snow::params::NoiseParams, TransportError> {
     NOISE_PATTERN.parse().map_err(|_| {
@@ -157,6 +158,41 @@ impl SecurePeerStream {
             ));
         }
         Ok(serde_json::from_slice(&plaintext[..read])?)
+    }
+
+    pub(crate) fn write_payload(&mut self, payload: &[u8]) -> Result<(), TransportError> {
+        for chunk in payload.chunks(MAX_PLAINTEXT_FRAME) {
+            let mut ciphertext = vec![0_u8; chunk.len() + 16];
+            let written = self
+                .transport
+                .write_message(chunk, &mut ciphertext)
+                .map_err(secure_channel_error)?;
+            write_binary_frame(&mut self.stream, &ciphertext[..written])?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn read_payload(&mut self, size: u64) -> Result<Vec<u8>, TransportError> {
+        if size > MAX_CONTENT_TRANSFER_SIZE {
+            return Err(TransportError::ContentTooLarge);
+        }
+        let size = usize::try_from(size).map_err(|_| TransportError::ContentTooLarge)?;
+        let mut payload = Vec::with_capacity(size);
+        while payload.len() < size {
+            let ciphertext = read_binary_frame(&mut self.stream, MAX_CIPHERTEXT_FRAME)?;
+            let mut plaintext = vec![0_u8; ciphertext.len()];
+            let read = self
+                .transport
+                .read_message(&ciphertext, &mut plaintext)
+                .map_err(secure_channel_error)?;
+            if read == 0 || payload.len().saturating_add(read) > size {
+                return Err(TransportError::InvalidMessage(
+                    "content payload length does not match its header".into(),
+                ));
+            }
+            payload.extend_from_slice(&plaintext[..read]);
+        }
+        Ok(payload)
     }
 
     fn configure(stream: &TcpStream) -> Result<(), TransportError> {

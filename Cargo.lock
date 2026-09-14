@@ -250,6 +250,8 @@ name = "kubeweft-agent-linux"
 version = "0.1.0"
 dependencies = [
  "kubeweft-agent-core",
+ "kubeweft-filesystem",
+ "kubeweft-filesystem-network",
  "kubeweft-transport",
 ]
 
@@ -291,6 +293,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kubeweft-filesystem-network"
+version = "0.1.0"
+dependencies = [
+ "kubeweft-filesystem",
+ "kubeweft-model",
+ "kubeweft-transport",
+]
+
+[[package]]
 name = "kubeweft-identity"
 version = "0.1.0"
 dependencies = [
@@ -304,6 +315,7 @@ version = "0.1.0"
 dependencies = [
  "kubeweft-filesystem",
  "kubeweft-model",
+ "kubeweft-transport",
 ]
 
 [[package]]
@@ -356,6 +368,7 @@ dependencies = [
  "kubeweft-model",
  "serde",
  "serde_json",
+ "sha2",
  "snow",
  "socket2",
  "uuid",

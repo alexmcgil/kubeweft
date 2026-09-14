@@ -23,6 +23,11 @@ pub enum TransportError {
     NotInCluster,
     InvalidInvite,
     Unauthorized,
+    ContentUnavailable,
+    ContentIntegrity,
+    ContentTooLarge,
+    NoSpace,
+    PeerContentDisabled,
     Conflict,
 }
 
@@ -57,6 +62,13 @@ impl fmt::Display for TransportError {
             Self::Unauthorized => {
                 formatter.write_str("peer identity or cluster membership credential is invalid")
             }
+            Self::ContentUnavailable => formatter.write_str("peer content is unavailable"),
+            Self::ContentIntegrity => {
+                formatter.write_str("peer content failed integrity validation")
+            }
+            Self::ContentTooLarge => formatter.write_str("peer content exceeds the transfer limit"),
+            Self::NoSpace => formatter.write_str("peer content store has insufficient space"),
+            Self::PeerContentDisabled => formatter.write_str("peer content service is disabled"),
             Self::Conflict => formatter.write_str("cluster state changed concurrently"),
         }
     }

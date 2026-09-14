@@ -3,12 +3,13 @@ use std::{
     io::{Read, Write},
     net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
     path::{Path, PathBuf},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use kubeweft_transport::{
-    AgentConfig, AgentHandle, ClusterRole, ClusterStore, LocalControlClient, TransportError,
-    discover,
+    AgentConfig, AgentHandle, ClusterRole, ClusterStore, LocalControlClient, PresenceState,
+    TransportError, discover,
 };
 
 fn temporary_directory(name: &str) -> PathBuf {
@@ -53,7 +54,56 @@ fn start_agent(directory: &PathBuf, name: &str) -> AgentHandle {
     config.listen = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
     config.discovery_port = None;
     config.device_name = Some(name.to_owned());
+    config.presence_interval = Duration::from_millis(50);
     AgentHandle::start(config).unwrap()
+}
+
+fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if predicate() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(predicate(), "condition did not become true before timeout");
+}
+
+#[test]
+fn authenticated_presence_tracks_members_without_changing_membership() {
+    let desktop_directory = temporary_directory("presence-desktop");
+    let laptop_directory = temporary_directory("presence-laptop");
+    let desktop = start_agent(&desktop_directory, "desktop");
+    let laptop = start_agent(&laptop_directory, "laptop");
+    let desktop_client = LocalControlClient::local(&desktop_directory).unwrap();
+    let laptop_client = LocalControlClient::local(&laptop_directory).unwrap();
+    let (_, invite) = desktop_client.create_cluster("home").unwrap();
+    laptop_client
+        .join_cluster(desktop.advertised_endpoint(), invite)
+        .unwrap();
+
+    wait_until(Duration::from_secs(3), || {
+        desktop_client.presence().is_ok_and(|records| {
+            records.len() == 2
+                && records
+                    .iter()
+                    .all(|record| record.state == PresenceState::Online)
+        })
+    });
+
+    laptop.shutdown().unwrap();
+    wait_until(Duration::from_secs(3), || {
+        desktop_client.presence().is_ok_and(|records| {
+            records.iter().any(|record| {
+                record.member.device_name == "laptop" && record.state == PresenceState::Offline
+            })
+        })
+    });
+    assert_eq!(desktop_client.members().unwrap().1.len(), 2);
+
+    desktop.shutdown().unwrap();
+    fs::remove_dir_all(desktop_directory).unwrap();
+    fs::remove_dir_all(laptop_directory).unwrap();
 }
 
 #[test]
@@ -273,7 +323,7 @@ fn loopback_tcp_cannot_invoke_local_privileged_control() {
         );
     }
     let payload = serde_json::to_vec(&serde_json::json!({
-        "version": 3,
+        "version": 4,
         "request": {"type": "create_cluster", "name": "must-not-exist"}
     }))
     .unwrap();

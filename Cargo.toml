@@ -8,6 +8,7 @@ members = [
     "crates/kubeweft-planner",
     "crates/kubeweft-agent-core",
     "crates/kubeweft-filesystem",
+    "crates/kubeweft-filesystem-network",
     "crates/kubeweft-local",
     "crates/kubeweft-plugin-sdk",
     "crates/kubeweft-protocol",

@@ -7,11 +7,12 @@ use kubeweft_model::DeviceId;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
-    ClusterId, ClusterMember, ClusterSummary, JoinRequestId, MembershipStatus, TransportError,
-    identity::LocalDeviceIdentity, secure::SecurePeerStream,
+    ClusterId, ClusterMember, ClusterSummary, JoinRequestId, MembershipStatus, PresenceRecord,
+    TransportError, domain::AuthorizedMember, identity::LocalDeviceIdentity,
+    secure::SecurePeerStream,
 };
 
-pub(crate) const PROTOCOL_VERSION: u16 = 3;
+pub(crate) const PROTOCOL_VERSION: u16 = 4;
 const MAX_FRAME_SIZE: usize = 1024 * 1024;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -34,6 +35,14 @@ pub(crate) enum LocalRequest {
         invite_token: String,
     },
     LocalMembers,
+    LocalPresence,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct PeerAuthorization {
+    pub cluster_id: ClusterId,
+    pub device_id: DeviceId,
+    pub credential: String,
 }
 
 /// Private development-only peer messages. Cross-language semantics live in proto.
@@ -46,9 +55,23 @@ pub(crate) enum RemoteRequest {
         join_request_id: JoinRequestId,
     },
     RemoteMembers {
-        cluster_id: ClusterId,
-        device_id: DeviceId,
-        credential: String,
+        authorization: PeerAuthorization,
+    },
+    PresenceProbe {
+        authorization: PeerAuthorization,
+    },
+    ContentExists {
+        authorization: PeerAuthorization,
+        content_id: String,
+    },
+    ContentGet {
+        authorization: PeerAuthorization,
+        content_id: String,
+    },
+    ContentPut {
+        authorization: PeerAuthorization,
+        content_id: String,
+        size: u64,
     },
 }
 
@@ -77,12 +100,28 @@ pub(crate) enum ControlResponse {
     JoinAccepted {
         cluster: ClusterSummary,
         credential: String,
-        members: Vec<ClusterMember>,
+        members: Vec<AuthorizedMember>,
     },
     Members {
         cluster: ClusterSummary,
         members: Vec<ClusterMember>,
     },
+    MemberRoster {
+        cluster: ClusterSummary,
+        members: Vec<AuthorizedMember>,
+    },
+    Presence {
+        records: Vec<PresenceRecord>,
+    },
+    PresenceAck,
+    ContentExists {
+        exists: bool,
+    },
+    ContentAvailable {
+        size: u64,
+    },
+    ContentReady,
+    ContentStored,
     Error {
         code: String,
         message: String,

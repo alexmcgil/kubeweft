@@ -10,6 +10,7 @@ use kubeweft_filesystem::{
     LocalContentStore, LocalMetadataStore, NetworkKind, PowerSource, StorageNode,
 };
 use kubeweft_model::DeviceId;
+use kubeweft_transport::ClusterStore;
 
 const LOCAL_CAPACITY: u64 = 100 * 1024 * 1024 * 1024;
 
@@ -28,8 +29,11 @@ impl LocalFilesystem {
             data_directory.join("metadata.json"),
         )?);
         let registry = Arc::new(ContentStoreRegistry::new());
-        let device_id = DeviceId::new("device.local")
-            .map_err(|error| FilesystemError::Storage(error.to_string()))?;
+        let device_id = ClusterStore::open(data_directory, None)
+            .and_then(|store| store.load())
+            .map_err(|error| FilesystemError::Storage(error.to_string()))?
+            .device_id()
+            .clone();
         registry.register(
             StorageNode {
                 device_id: device_id.clone(),
@@ -41,7 +45,7 @@ impl LocalFilesystem {
                 network: NetworkKind::Lan,
             },
             Arc::new(LocalContentStore::open(
-                data_directory.join("content").join(device_id.as_str()),
+                data_directory.join("content").join("blobs"),
                 LOCAL_CAPACITY,
             )?),
         )?;
