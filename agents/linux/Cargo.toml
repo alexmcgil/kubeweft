@@ -7,6 +7,8 @@ license.workspace = true
 
 [dependencies]
 kubeweft-agent-core = { path = "../../crates/kubeweft-agent-core" }
+kubeweft-filesystem = { path = "../../crates/kubeweft-filesystem" }
+kubeweft-filesystem-network = { path = "../../crates/kubeweft-filesystem-network" }
 kubeweft-transport = { path = "../../crates/kubeweft-transport" }
 
 [[bin]]

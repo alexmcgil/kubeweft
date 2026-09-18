@@ -8,6 +8,7 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use kubeweft_model::DeviceId;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -73,6 +74,21 @@ pub struct ClusterMember {
     pub device_name: String,
     pub endpoint: SocketAddr,
     pub joined_at_millis: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PresenceState {
+    Unknown,
+    Online,
+    Offline,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PresenceRecord {
+    pub member: ClusterMember,
+    pub state: PresenceState,
+    pub observed_at_millis: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,12 +166,34 @@ impl StoredCluster {
             .map(|member| member.member.clone())
             .collect()
     }
+
+    pub fn authorized_members(&self) -> Vec<AuthorizedMember> {
+        self.members
+            .iter()
+            .map(|member| AuthorizedMember {
+                member: member.member.clone(),
+                credential_digest: if member.credential_digest.is_empty() {
+                    credential_digest(&member.credential)
+                } else {
+                    member.credential_digest.clone()
+                },
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct StoredMember {
     pub member: ClusterMember,
     pub credential: String,
+    #[serde(default)]
+    pub credential_digest: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct AuthorizedMember {
+    pub member: ClusterMember,
+    pub credential_digest: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -221,6 +259,14 @@ impl PairingInvitation {
 
 pub(crate) fn new_secret() -> String {
     format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
+}
+
+pub(crate) fn credential_digest(credential: &str) -> String {
+    let digest = Sha256::new()
+        .chain_update(b"kubeweft-membership-credential-v1\0")
+        .chain_update(credential.as_bytes())
+        .finalize();
+    format!("sha256:{digest:x}")
 }
 
 pub(crate) fn now_millis() -> u64 {

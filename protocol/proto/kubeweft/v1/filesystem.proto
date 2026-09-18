@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package kubeweft.v1;
+
+import "kubeweft/v1/common.proto";
+import "kubeweft/v1/control.proto";
+
+// Peer content messages carry immutable blobs only. Filesystem namespace,
+// manifests, placement, and authoritative metadata are intentionally absent.
+message ContentExistsRequest {
+  PeerAuthorization authorization = 1;
+  ContentId content_id = 2;
+}
+
+message ContentExistsResponse {
+  bool exists = 1;
+}
+
+message GetContentRequest {
+  PeerAuthorization authorization = 1;
+  ContentId content_id = 2;
+}
+
+message GetContentResponse {
+  uint64 size = 1;
+}
+
+message PutContentRequest {
+  PeerAuthorization authorization = 1;
+  ContentId content_id = 2;
+  uint64 size = 3;
+}
+
+message PutContentReady {
+}
+
+message PutContentResponse {
+}

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::{
-    ClusterMember, ClusterSummary, MembershipStatus, TransportError,
+    ClusterMember, ClusterSummary, MembershipStatus, PresenceRecord, TransportError,
     local_ipc::{connect, socket_path},
     wire::{
         ControlResponse, LocalRequest, PROTOCOL_VERSION, RequestEnvelope, ResponseEnvelope,
@@ -66,6 +66,13 @@ impl LocalControlClient {
     pub fn members(&self) -> Result<(ClusterSummary, Vec<ClusterMember>), TransportError> {
         match self.request(LocalRequest::LocalMembers)? {
             ControlResponse::Members { cluster, members } => Ok((cluster, members)),
+            response => unexpected(response),
+        }
+    }
+
+    pub fn presence(&self) -> Result<Vec<PresenceRecord>, TransportError> {
+        match self.request(LocalRequest::LocalPresence)? {
+            ControlResponse::Presence { records } => Ok(records),
             response => unexpected(response),
         }
     }

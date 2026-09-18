@@ -17,6 +17,10 @@ message JoinRequestId {
   string value = 1;
 }
 
+message ContentId {
+  string value = 1;
+}
+
 message CapabilityId {
   string value = 1;
 }

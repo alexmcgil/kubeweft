@@ -56,7 +56,21 @@ message AcceptClusterJoinRequest {
 message AcceptClusterJoinResponse {
   Cluster cluster = 1;
   string membership_credential = 2;
-  repeated ClusterMember members = 3;
+  repeated ClusterMember members = 3 [deprecated = true];
+  repeated AuthorizedClusterMember authorized_members = 4;
+}
+
+// The digest lets members validate a presented high-entropy credential without
+// distributing the bearer credential itself.
+message AuthorizedClusterMember {
+  ClusterMember member = 1;
+  bytes membership_credential_sha256 = 2;
+}
+
+message PeerAuthorization {
+  ClusterId cluster_id = 1;
+  DeviceId device_id = 2;
+  string membership_credential = 3;
 }
 
 message ListClusterMembersRequest {
@@ -69,9 +83,40 @@ message ListClusterMembersResponse {
 }
 
 message ListRemoteClusterMembersRequest {
-  ClusterId cluster_id = 1;
-  // Must match the static identity proven by the peer channel.
-  DeviceId device_id = 2;
-  // Separately revocable authorization; it is not the device identity.
-  string membership_credential = 3;
+  ClusterId cluster_id = 1 [deprecated = true];
+  DeviceId device_id = 2 [deprecated = true];
+  string membership_credential = 3 [deprecated = true];
+  PeerAuthorization authorization = 4;
+}
+
+message ListRemoteClusterMembersResponse {
+  Cluster cluster = 1;
+  repeated AuthorizedClusterMember members = 2;
+}
+
+enum PresenceState {
+  PRESENCE_STATE_UNSPECIFIED = 0;
+  PRESENCE_STATE_UNKNOWN = 1;
+  PRESENCE_STATE_ONLINE = 2;
+  PRESENCE_STATE_OFFLINE = 3;
+}
+
+message PresenceRecord {
+  ClusterMember member = 1;
+  PresenceState state = 2;
+  optional uint64 observed_at_millis = 3;
+}
+
+message ProbePresenceRequest {
+  PeerAuthorization authorization = 1;
+}
+
+message ProbePresenceResponse {
+}
+
+message LocalPresenceRequest {
+}
+
+message LocalPresenceResponse {
+  repeated PresenceRecord records = 1;
 }

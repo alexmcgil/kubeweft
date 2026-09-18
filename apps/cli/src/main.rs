@@ -189,6 +189,18 @@ fn run_cluster(mut arguments: Vec<OsString>, data_directory: PathBuf) -> Result<
                 );
             }
         }
+        "presence" => {
+            ensure_empty(&arguments)?;
+            for record in client.presence()? {
+                println!(
+                    "{}\t{}\t{}\t{}",
+                    record.member.device_id,
+                    record.member.device_name,
+                    record.member.endpoint,
+                    presence_state_name(record.state)
+                );
+            }
+        }
         _ => {
             return Err(CliError::Usage(format!(
                 "unknown cluster command: {command}"
@@ -202,6 +214,14 @@ fn role_name(role: ClusterRole) -> &'static str {
     match role {
         ClusterRole::Coordinator => "coordinator",
         ClusterRole::Member => "member",
+    }
+}
+
+fn presence_state_name(state: kubeweft_transport::PresenceState) -> &'static str {
+    match state {
+        kubeweft_transport::PresenceState::Unknown => "unknown",
+        kubeweft_transport::PresenceState::Online => "online",
+        kubeweft_transport::PresenceState::Offline => "offline",
     }
 }
 
@@ -322,7 +342,9 @@ fn print_help() {
     println!("kubeweft [--data-dir DIR] <fs|cluster> <command>");
     println!("filesystem: init [USER], mkdir PATH, create PATH, ls [PATH], stat PATH");
     println!("          cat PATH, write PATH [--expect GENERATION], mv FROM TO, rm PATH");
-    println!("cluster:  status, create NAME, invite, join ENDPOINT PAIRING_CODE, members");
+    println!(
+        "cluster:  status, create NAME, invite, join ENDPOINT PAIRING_CODE, members, presence"
+    );
     println!("          discover [--port PORT] [--timeout-ms MILLISECONDS]");
 }
 

@@ -10,6 +10,8 @@ mod domain;
 mod error;
 mod identity;
 mod local_ipc;
+mod peer_content;
+mod presence;
 mod secure;
 mod store;
 mod wire;
@@ -19,7 +21,8 @@ pub use client::LocalControlClient;
 pub use discovery::{DEFAULT_DISCOVERY_PORT, DiscoveryAnnouncement, discover};
 pub use domain::{
     AgentState, ClusterId, ClusterMember, ClusterRole, ClusterSummary, JoinRequestId,
-    MembershipStatus,
+    MembershipStatus, PresenceRecord, PresenceState,
 };
 pub use error::TransportError;
+pub use peer_content::{ClusterContentClient, PeerContentStore};
 pub use store::ClusterStore;

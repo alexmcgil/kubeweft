@@ -1,4 +1,6 @@
-use std::{env, path::PathBuf, process::ExitCode};
+use std::{env, path::PathBuf, process::ExitCode, sync::Arc};
+
+const CONTENT_CAPACITY: u64 = 100 * 1024 * 1024 * 1024;
 
 fn main() -> ExitCode {
     match run(env::args().skip(1).collect()) {
@@ -53,6 +55,17 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
             _ => return Err(format!("unknown option: {option}")),
         }
     }
+
+    let content_store: Arc<dyn kubeweft_filesystem::ContentStore> = Arc::new(
+        kubeweft_filesystem::LocalContentStore::open(
+            config.data_directory.join("content").join("blobs"),
+            CONTENT_CAPACITY,
+        )
+        .map_err(|error| error.to_string())?,
+    );
+    config.content_store = Some(Arc::new(
+        kubeweft_filesystem_network::FilesystemPeerContentStore::new(content_store),
+    ));
 
     let discovery = config
         .discovery_port
